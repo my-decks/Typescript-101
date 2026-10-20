@@ -1,0 +1,36 @@
+/* Chassé deck theme — warm stage aesthetic.
+   Dark lives on :root, light overrides on [data-theme="light"]. */
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Fraunces:ital,wght@1,500;1,600&display=swap');
+:root {
+  --acc: #ffb454;
+  --acc2: #ff8fa3;
+  --ink: #f3eff9;
+  --ink2: #efeaf7;
+  --mut: #a59dbb;
+  --line: rgba(165, 157, 187, 0.22);
+  --card: rgba(255, 255, 255, 0.05);
+  --card2: rgba(255, 255, 255, 0.015);
+  --bg: #100e17;
+  --grid: rgba(255, 255, 255, 0.035);
+  --glow: rgba(255, 180, 84, 0.16);
+  --glow2: rgba(255, 122, 144, 0.1);
+  --fd: 'Space Grotesk', -apple-system, 'Segoe UI', sans-serif;
+  --fb: 'Instrument Sans', -apple-system, 'Segoe UI', sans-serif;
+  --fm: 'JetBrains Mono', ui-monospace, 'SF Mono', Consolas, monospace;
+  --fbrand: 'Fraunces', Georgia, serif;
+}
+[data-theme="light"] {
+  --acc: #c25a08;
+  --acc2: #b4234a;
+  --ink: #1d1a2c;
+  --ink2: #16132a;
+  --mut: #5f5877;
+  --line: rgba(95, 88, 119, 0.25);
+  --card: rgba(255, 255, 255, 0.72);
+  --card2: rgba(255, 255, 255, 0.35);
+  --bg: #f6f4fa;
+  --grid: rgba(40, 30, 90, 0.06);
+  --glow: rgba(194, 90, 8, 0.1);
+  --glow2: rgba(200, 50, 79, 0.06);
+}
+#root { background: var(--bg); color: var(--ink); font-family: var(--fb); }

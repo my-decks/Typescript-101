@@ -1,0 +1,35 @@
+{
+  "format": "smdeck",
+  "format_version": 1,
+  "id": "typescript-101",
+  "title": "Typescript-101",
+  "created": "2026-10-20T18:51:16.643Z",
+  "modified": "2026-10-20T18:50:56.228Z",
+  "settings": {
+    "size": [
+      1280,
+      720
+    ],
+    "defaultMode": "dark",
+    "transitionMs": 260,
+    "bgCrossfadeMs": 450
+  },
+  "bg": {
+    "type": "code",
+    "path": "bg/common.tsx"
+  },
+  "overlay": {
+    "type": "code",
+    "path": "overlay/common.tsx"
+  },
+  "slides": [
+    {
+      "id": "title",
+      "label": "Title"
+    },
+    {
+      "id": "end",
+      "label": "End"
+    }
+  ]
+}
