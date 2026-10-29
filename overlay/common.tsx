@@ -4,7 +4,7 @@ export default function CommonOverlay() {
   return (
     <>
       <CornerMarks inset={20} />
-      <Footer text="Chassé" />
+      <Footer text="VS Code & TS" />
       <Progress />
     </>
   );

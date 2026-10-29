@@ -1,36 +1,257 @@
-/* Chassé deck theme — warm stage aesthetic.
-   Dark lives on :root, light overrides on [data-theme="light"]. */
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Fraunces:ital,wght@1,500;1,600&display=swap');
+/* TypeScript 101 — "Type Flow" theme.
+   Light-first: a calm sky field with JS-yellow → sky → TS-blue flowing
+   ribbons (drawn by bg/common.tsx). Dark mode = deep ink navy.
+   Code windows always render as a real VS Code editor (dark) in both modes.
+   Keeps the smdeck variable contract (--acc/--ink/--card/--fd/…) and the
+   opt-in motion-class API (.an · .stag · .tl · .idle-* · .cur · .squig · .hl). */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
 :root {
-  --acc: #ffb454;
-  --acc2: #ff8fa3;
-  --ink: #f3eff9;
-  --ink2: #efeaf7;
-  --mut: #a59dbb;
-  --line: rgba(165, 157, 187, 0.22);
-  --card: rgba(255, 255, 255, 0.05);
-  --card2: rgba(255, 255, 255, 0.015);
-  --bg: #100e17;
-  --grid: rgba(255, 255, 255, 0.035);
-  --glow: rgba(255, 180, 84, 0.16);
-  --glow2: rgba(255, 122, 144, 0.1);
-  --fd: 'Space Grotesk', -apple-system, 'Segoe UI', sans-serif;
-  --fb: 'Instrument Sans', -apple-system, 'Segoe UI', sans-serif;
-  --fm: 'JetBrains Mono', ui-monospace, 'SF Mono', Consolas, monospace;
-  --fbrand: 'Fraunces', Georgia, serif;
+  --ts: #3178C6;
+  --ts-deep: #1F5AA0;
+  --vs: #007ACC;
+  --js: #F0C000;
+  --js-soft: rgba(240, 192, 0, 0.16);
+  --ts-soft: rgba(49, 120, 198, 0.10);
+  --ts-faint: rgba(49, 120, 198, 0.05);
+  --chip-bd: rgba(49, 120, 198, 0.30);
+  --border-strong: #C5D0E0;
+  --faint: #98A4B8;
+  --ok: #107C10;
+  --err: #D13438;
+  --shadow: 0 2px 12px rgba(14, 26, 46, 0.07);
+
+  --acc: var(--ts);
+  --acc2: var(--vs);
+  --warn: #9A6700;
+  --acc-soft: var(--ts-soft);
+  --ink: #0E1A2E;
+  --ink2: #0E1A2E;
+  --mut: #4F5F7A;
+  --line: #E1E7F0;
+  --card: #FFFFFF;
+  --card2: rgba(14, 26, 46, 0.02);
+  --bg: #FCFDFF;
+  --grid: rgba(49, 120, 198, 0.08);
+  --glow: rgba(49, 120, 198, 0.10);
+  --glow2: rgba(240, 192, 0, 0.10);
+
+  --fd: 'Segoe UI Variable Display', 'Segoe UI', 'Inter', -apple-system, BlinkMacSystemFont, system-ui, 'Helvetica Neue', sans-serif;
+  --fb: 'Segoe UI', 'Inter', -apple-system, BlinkMacSystemFont, system-ui, 'Helvetica Neue', sans-serif;
+  --fm: 'Cascadia Code', 'Cascadia Mono', 'JetBrains Mono', Consolas, 'SF Mono', ui-monospace, monospace;
+  --fbrand: 'Cascadia Code', 'JetBrains Mono', ui-monospace, monospace;
+
+  /* editor tokens — code windows are always dark */
+  --code: #1E1E1E;
+  --code-bar: #252526;
+  --code-bd: #333F4F;
+  --code-fg: #D4D4D4;
+  --code-mut: #9DA5B4;
+  --tk-k: #569CD6;
+  --tk-t: #4EC9B0;
+  --tk-str: #CE9178;
+  --tk-d: #DCDCAA;
+  --tk-n: #B5CEA8;
+  --tk-f: #9CDCFE;
+  --tk-cm: #6A9955;
+  --tk-p: #C586C0;
+  --tk-err: #F44747;
+  --tk-warn: #CCA700;
 }
-[data-theme="light"] {
-  --acc: #c25a08;
-  --acc2: #b4234a;
-  --ink: #1d1a2c;
-  --ink2: #16132a;
-  --mut: #5f5877;
-  --line: rgba(95, 88, 119, 0.25);
-  --card: rgba(255, 255, 255, 0.72);
-  --card2: rgba(255, 255, 255, 0.35);
-  --bg: #f6f4fa;
-  --grid: rgba(40, 30, 90, 0.06);
-  --glow: rgba(194, 90, 8, 0.1);
-  --glow2: rgba(200, 50, 79, 0.06);
+[data-theme="dark"] {
+  --ts: #5AA6F0;
+  --ts-deep: #9CCBFA;
+  --vs: #3FB1FF;
+  --js: #FFD43B;
+  --js-soft: rgba(255, 212, 59, 0.14);
+  --ts-soft: rgba(90, 166, 240, 0.15);
+  --ts-faint: rgba(90, 166, 240, 0.07);
+  --chip-bd: rgba(90, 166, 240, 0.38);
+  --border-strong: #3A4A6B;
+  --faint: #6F7F9E;
+  --ok: #7FD67A;
+  --err: #F27B84;
+  --shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+
+  --warn: #E3B341;
+  --ink: #EDF2FB;
+  --ink2: #EDF2FB;
+  --mut: #A9B7D0;
+  --line: #25314D;
+  --card: #121A2E;
+  --card2: rgba(255, 255, 255, 0.03);
+  --bg: #0A1020;
+  --grid: rgba(90, 166, 240, 0.08);
+  --glow: rgba(90, 166, 240, 0.12);
+  --glow2: rgba(255, 212, 59, 0.07);
 }
 #root { background: var(--bg); color: var(--ink); font-family: var(--fb); }
+::selection { background: var(--ts); color: #fff; }
+
+/* ── Shared deck furniture ─────────────────────────────────────────── */
+.grad { background: linear-gradient(110deg, var(--ts) 10%, var(--vs) 60%, var(--ts) 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+code.i { font: 600 0.88em var(--fm); background: var(--ts-soft); color: var(--ts-deep); padding: 0.08em 0.4em; border-radius: 6px; }
+kbd { font: 600 0.95em var(--fm); padding: 2px 7px; border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 6px; color: var(--mut); margin-right: 3px; background: var(--card); }
+
+.chip { display: inline-flex; align-items: center; gap: 8px; font: 600 11.5px var(--fm); letter-spacing: 0.1em; text-transform: uppercase; padding: 8px 14px; border: 1px solid var(--chip-bd); border-radius: 999px; color: var(--ts-deep); background: var(--ts-faint); }
+.chip.js { border-color: rgba(240, 192, 0, 0.5); background: var(--js-soft); color: var(--ink); }
+[data-theme="dark"] .chip.js { border-color: rgba(255, 212, 59, 0.45); }
+.chip-ghost { border-style: dashed; color: var(--mut); background: transparent; border-color: var(--border-strong); }
+
+.tbl { width: 100%; border-collapse: separate; border-spacing: 0; font: 400 15px/1.45 var(--fb); background: var(--card); border-radius: 12px; overflow: hidden; box-shadow: var(--shadow); border: 1px solid var(--line); }
+.tbl th { text-align: left; font: 600 11.5px var(--fm); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ts-deep); background: var(--ts-faint); padding: 11px 16px; border-bottom: 1px solid var(--line); }
+.tbl td { padding: 11px 16px; border-bottom: 1px solid var(--line); color: var(--ink); }
+.tbl tr:last-child td { border-bottom: 0; }
+.tbl td:first-child { font-weight: 600; }
+
+/* VS Code window — always editor-dark, both themes */
+.code { position: relative; background: var(--code); border: 1px solid var(--code-bd); border-radius: 14px; overflow: hidden; box-shadow: 0 10px 34px rgba(8, 16, 36, 0.28); min-width: 0; }
+.code-bar { display: flex; align-items: center; gap: 7px; padding: 9px 14px; background: var(--code-bar); border-bottom: 1px solid var(--code-bd); }
+.code-bar i { width: 11px; height: 11px; border-radius: 50%; background: #FF5F57; flex: none; }
+.code-bar i:nth-child(2) { background: #FEBC2E; }
+.code-bar i:nth-child(3) { background: #28C840; }
+.code-bar b { margin-left: 10px; font: 500 11.5px var(--fm); color: var(--code-mut); letter-spacing: 0.06em; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.code-bar em { margin-left: auto; font: 700 10.5px var(--fm); font-style: normal; background: #3178C6; color: #fff; padding: 2px 7px; border-radius: 5px; flex: none; }
+.code-bar em.js { background: #F0C000; color: #1b1b1b; }
+.code pre { margin: 0; padding: 13px 18px; font: 400 15px/1.6 var(--fm); color: var(--code-fg); white-space: pre; }
+/* inline diagnostics inside the editor */
+.hint { display: block; margin: 2px 0 4px; padding: 3px 10px; border-left: 3px solid var(--tk-err); color: #F48771; font: 400 13.5px/1.4 var(--fm); background: rgba(244, 71, 71, 0.08); }
+.hint.info { border-color: #3794FF; color: #75BEFF; background: rgba(55, 148, 255, 0.1); }
+.hint.ok { border-color: #4EC9B0; color: #4EC9B0; background: rgba(78, 201, 176, 0.1); }
+.dbgline { display: block; background: rgba(255, 212, 59, 0.14); margin: 0 -18px; padding: 0 18px; border-left: 3px solid #FFD43B; }
+.bp { display: inline-block; width: 0.68em; height: 0.68em; border-radius: 50%; background: #E51400; margin-right: 0.6em; }
+
+/* ══════════════════════════════════════════════════════════════════
+   MOTION LAYER — entrances · one-by-one loading · fast typing · idle
+   Pure CSS. Opt-in classes only; slides without classes stay static.
+
+   .an + variant ......... single-element entrance (up/fade/left/right/
+                           pop/bar/blur), delays via .d1–.d12
+   .stag ................. container whose children land ONE BY ONE
+                           (start = --sd, step = --ss; .sb/.sc start later)
+   .tl / .tlw ............ fast per-line code typing (steps by char count)
+   .idle-* ............... ambient loops (float/pulse/spin/bob/nudge/sheen/
+                           text-sheen/glow/ring/scan/drift)
+   .squig ................ wavy lint-error underline, always animating
+   .hl ................... one-shot "active line" flash for editor rows
+   .cur .................. blinking terminal cursor
+   ══════════════════════════════════════════════════════════════════ */
+
+/* ── Keyframes: entrances ── */
+@keyframes smRise   { from { opacity: 0; transform: translateY(26px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes smFade   { from { opacity: 0; } to { opacity: 1; } }
+@keyframes smLeft   { from { opacity: 0; transform: translateX(-38px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes smRight  { from { opacity: 0; transform: translateX(38px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes smPop    { 0% { opacity: 0; transform: scale(.78); } 62% { opacity: 1; transform: scale(1.05); } 100% { opacity: 1; transform: scale(1); } }
+@keyframes smBar    { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes smBlurIn { from { opacity: 0; transform: translateY(22px) scale(.94); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes smTypeIn { from { clip-path: inset(-40% 106% -40% -2%); } to { clip-path: inset(-40% -8% -40% -2%); } }
+
+/* ── Keyframes: idle / ambient loops ── */
+@keyframes smFloat     { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-7px); } }
+@keyframes smPulse     { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.14); opacity: .75; } }
+@keyframes smSpin      { to { transform: rotate(360deg); } }
+@keyframes smBob       { 0%, 100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-2.4px) scale(1.06); } }
+@keyframes smNudge     { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(5px); } }
+@keyframes smBlink     { 0%, 55% { opacity: 1; } 56%, 100% { opacity: 0; } }
+@keyframes smSheen     { from { background-position: 220% 0; } to { background-position: -220% 0; } }
+@keyframes smTextSheen { from { background-position: 0% 50%; } to { background-position: 300% 50%; } }
+@keyframes smGlowPulse { 0%, 100% { box-shadow: 0 0 0 3px var(--acc-soft); } 50% { box-shadow: 0 0 0 3px var(--acc-soft), 0 0 26px color-mix(in srgb, var(--acc) 36%, transparent); } }
+@keyframes smRing      { 0%, 100% { box-shadow: 0 0 0 10px var(--acc-soft); } 50% { box-shadow: 0 0 0 18px var(--acc-soft); } }
+@keyframes smScan      { 0% { transform: translateY(-110%); opacity: 0; } 12% { opacity: 1; } 88% { opacity: 1; } 100% { transform: translateY(110%); opacity: 0; } }
+@keyframes smDrift     { 0%, 100% { transform: translate(0, 0) rotate(0deg); } 33% { transform: translate(9px, -13px) rotate(7deg); } 66% { transform: translate(-8px, 8px) rotate(-6deg); } }
+@keyframes smSquig     { from { background-position-x: 0; } to { background-position-x: 24px; } }
+@keyframes smHlFlash   { 0% { background: rgba(255, 212, 59, 0.38); } 100% { background: rgba(255, 212, 59, 0.14); } }
+
+/* ── Entrance primitives ────────────────────────────────────────────
+   fill-mode: backwards → elements rest at their natural state after
+   landing, so hover transitions keep working afterwards. */
+.an { animation-duration: var(--du, .62s); animation-timing-function: cubic-bezier(.22, 1, .36, 1); animation-fill-mode: backwards; }
+.an.up    { animation-name: smRise; }
+.an.fade  { animation-name: smFade; animation-timing-function: ease-out; }
+.an.left  { animation-name: smLeft; }
+.an.right { animation-name: smRight; }
+.an.pop   { animation-name: smPop; animation-duration: var(--du, .58s); }
+.an.bar   { animation-name: smBar; transform-origin: left center; animation-duration: var(--du, .72s); }
+.an.blur  { animation-name: smBlurIn; animation-duration: var(--du, .85s); }
+
+/* absolute entrance delays */
+.d1 { animation-delay: .07s; }  .d2 { animation-delay: .14s; }  .d3 { animation-delay: .22s; }
+.d4 { animation-delay: .30s; }  .d5 { animation-delay: .38s; }  .d6 { animation-delay: .46s; }
+.d7 { animation-delay: .56s; }  .d8 { animation-delay: .66s; }  .d9 { animation-delay: .76s; }
+.d10 { animation-delay: .88s; } .d11 { animation-delay: 1s; }   .d12 { animation-delay: 1.12s; }
+
+/* ── One-by-one loading: staggered children ── */
+.stag > * { animation: smRise var(--du, .55s) cubic-bezier(.22, 1, .36, 1) backwards; }
+.stag > *:nth-child(1)  { animation-delay: var(--sd, .34s); }
+.stag > *:nth-child(2)  { animation-delay: calc(var(--sd, .34s) + var(--ss, .085s)); }
+.stag > *:nth-child(3)  { animation-delay: calc(var(--sd, .34s) + var(--ss, .085s) * 2); }
+.stag > *:nth-child(4)  { animation-delay: calc(var(--sd, .34s) + var(--ss, .085s) * 3); }
+.stag > *:nth-child(5)  { animation-delay: calc(var(--sd, .34s) + var(--ss, .085s) * 4); }
+.stag > *:nth-child(6)  { animation-delay: calc(var(--sd, .34s) + var(--ss, .085s) * 5); }
+.stag > *:nth-child(7)  { animation-delay: calc(var(--sd, .34s) + var(--ss, .085s) * 6); }
+.stag > *:nth-child(8)  { animation-delay: calc(var(--sd, .34s) + var(--ss, .085s) * 7); }
+.stag > *:nth-child(9)  { animation-delay: calc(var(--sd, .34s) + var(--ss, .085s) * 8); }
+.stag > *:nth-child(10) { animation-delay: calc(var(--sd, .34s) + var(--ss, .085s) * 9); }
+.stag > *:nth-child(11) { animation-delay: calc(var(--sd, .34s) + var(--ss, .085s) * 10); }
+.stag > *:nth-child(12) { animation-delay: calc(var(--sd, .34s) + var(--ss, .085s) * 11); }
+.stag > *:nth-child(13) { animation-delay: calc(var(--sd, .34s) + var(--ss, .085s) * 12); }
+.stag > *:nth-child(14) { animation-delay: calc(var(--sd, .34s) + var(--ss, .085s) * 13); }
+.stag > *:nth-child(15) { animation-delay: calc(var(--sd, .34s) + var(--ss, .085s) * 14); }
+.stag > *:nth-child(16) { animation-delay: calc(var(--sd, .34s) + var(--ss, .085s) * 15); }
+.stag.poppy > * { animation-name: smPop; animation-duration: var(--du, .5s); }
+/* later waves: add .sb / .sc to the container */
+.sb { --sd: .55s; }
+.sc { --sd: .72s; }
+
+/* hover interactivity for landing cards/rows (works after entrance) */
+.stag > * { transition: transform .35s cubic-bezier(.22, 1, .36, 1), border-color .35s ease, box-shadow .35s ease; }
+.stag > *:hover { transform: translateY(-4px); border-color: color-mix(in srgb, var(--acc) 52%, transparent); box-shadow: 0 16px 32px -16px color-mix(in srgb, var(--acc) 42%, transparent); }
+[data-theme="dark"] .stag > *:hover { box-shadow: 0 16px 32px -16px rgba(0, 0, 0, .75); }
+
+/* ── Fast code typing (per line) ──
+   .tlw: block line wrapper · .tl: shrink-to-fit line that wipes in with
+   steps(--n) → uniform ~--tms per character (fast).
+   Base state is fully revealed; fill-mode: backwards hides each line
+   during its delay, then the keyframes wipe it in. */
+.tlw { display: block; white-space: pre; }
+.tl  { display: inline-block; min-width: 1ch; white-space: pre; animation: smTypeIn calc(var(--n, 24) * var(--tms, 12ms)) steps(var(--n, 24), end) var(--d, 0s) backwards; }
+
+/* terminal cursor */
+.cur { animation: smBlink 1.05s steps(1) infinite; }
+
+/* ── Idle / ambient utilities ── */
+.idle-float      { animation: smFloat 5.2s ease-in-out infinite; }
+.idle-pulse      { animation: smPulse 2.7s ease-in-out infinite; }
+.idle-spin       { transform-box: fill-box; transform-origin: center; animation: smSpin 22s linear infinite; }
+.idle-bob        { animation: smBob 3.6s ease-in-out infinite; }
+.idle-nudge      { animation: smNudge 2.1s ease-in-out infinite; }
+.idle-sheen      { background-size: 220% 100%; animation: smSheen 4.2s ease-in-out infinite; }
+.idle-text-sheen { background-size: 240% 100%; animation: smTextSheen 6s ease-in-out infinite; }
+.idle-glow       { animation: smGlowPulse 3.2s ease-in-out infinite; }
+.idle-ring       { animation: smRing 3.4s ease-in-out infinite; }
+.idle-drift      { animation: smDrift 7.5s ease-in-out infinite; }
+.idle-scan       { position: absolute; left: 0; right: 0; height: 34%; top: 0; pointer-events: none; background: linear-gradient(180deg, transparent, rgba(78, 201, 176, 0.06), transparent); animation: smScan 5.5s ease-in-out infinite; }
+
+/* wavy error underline (ESLint squiggle) — shifts forever, editor-dark color */
+.squig {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='6' viewBox='0 0 12 6'%3E%3Cpath d='M0 4.5 Q1.5 1 3 3 T6 3 T9 3 T12 3' fill='none' stroke='%23F44747' stroke-width='1.6'/%3E%3C/svg%3E");
+  background-repeat: repeat-x;
+  background-position: bottom left;
+  background-size: 12px 6px;
+  padding-bottom: 5px;
+  animation: smSquig .55s linear infinite;
+}
+.squig.w { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='6' viewBox='0 0 12 6'%3E%3Cpath d='M0 4.5 Q1.5 1 3 3 T6 3 T9 3 T12 3' fill='none' stroke='%23CCA700' stroke-width='1.6'/%3E%3C/svg%3E"); }
+/* one-shot active-line flash — use inside code panels */
+.hl { animation: smHlFlash 2.6s ease-out .9s backwards; }
+/* floating code glyphs on decorative layers */
+.glyph { position: absolute; font-family: var(--fm); font-weight: 700; color: var(--ts); opacity: .12; user-select: none; pointer-events: none; }
+.glyph.t { color: var(--vs); }
+.glyph.w { color: var(--js); }
+
+/* ── Accessibility: respect reduced motion ── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+  .tl, .an, .stag > * { opacity: 1 !important; clip-path: none !important; }
+}

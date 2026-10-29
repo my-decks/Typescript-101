@@ -1,4 +1,3 @@
-Opening remarks for **Typescript-101**.
+# VS Code & TS — Title
 
-- Say why you're here
-- Set the one thing the audience should remember
+Welcome everyone. Frame the talk in one line: three habits — native debugging, linting, and type inference — that make JavaScript projects calmer. Mention it works for brand-new projects and old JS codebases alike.

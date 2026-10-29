@@ -2,34 +2,114 @@
   "format": "smdeck",
   "format_version": 1,
   "id": "typescript-101",
-  "title": "Typescript-101",
+  "title": "VS Code & TS — TypeScript 101: Modern Web Tooling",
   "created": "2026-10-20T18:51:16.643Z",
-  "modified": "2026-10-20T18:50:56.228Z",
+  "modified": "2026-10-23T08:02:09.121Z",
   "settings": {
     "size": [
       1280,
       720
     ],
-    "defaultMode": "dark",
+    "defaultMode": "light",
     "transitionMs": 260,
     "bgCrossfadeMs": 450
   },
   "bg": {
-    "type": "code",
-    "path": "bg/common.tsx"
+    "type": "image",
+    "path": "assets/Minimal Blue and Pastel Ribbon Background.png"
   },
   "overlay": {
     "type": "code",
-    "path": "overlay/common.tsx"
+    "path": "overlay/MSA.tsx"
   },
   "slides": [
     {
       "id": "title",
-      "label": "Title"
+      "label": "VS Code & TS",
+      "bg": {
+        "type": "code",
+        "path": "bg/GlassLoop.tsx"
+      }
+    },
+    {
+      "id": "presenter",
+      "label": "Your Presenter"
+    },
+    {
+      "id": "agenda",
+      "label": "Agenda"
+    },
+    {
+      "id": "why",
+      "label": "Why Tooling?"
+    },
+    {
+      "id": "tooling",
+      "label": "VS Code at a Glance"
+    },
+    {
+      "id": "debug-setup",
+      "label": "Native Debugging"
+    },
+    {
+      "id": "breakpoints",
+      "label": "Breakpoint Toolkit"
+    },
+    {
+      "id": "debug-ts",
+      "label": "Debugging TypeScript"
+    },
+    {
+      "id": "linting",
+      "label": "Linting with ESLint"
+    },
+    {
+      "id": "format",
+      "label": "Format on Save"
+    },
+    {
+      "id": "basics",
+      "label": "What is TypeScript?"
+    },
+    {
+      "id": "inference",
+      "label": "Type Inference 101"
+    },
+    {
+      "id": "infer-fn",
+      "label": "Inference in Functions"
+    },
+    {
+      "id": "narrowing",
+      "label": "Narrowing"
+    },
+    {
+      "id": "tsconfig",
+      "label": "tsconfig & Strict Mode"
+    },
+    {
+      "id": "workflow",
+      "label": "The Daily Loop"
+    },
+    {
+      "id": "demo",
+      "label": "Live Demo"
+    },
+    {
+      "id": "pitfalls",
+      "label": "Common Pitfalls"
+    },
+    {
+      "id": "recap",
+      "label": "Recap"
+    },
+    {
+      "id": "resources",
+      "label": "Resources"
     },
     {
       "id": "end",
-      "label": "End"
+      "label": "Questions?"
     }
   ]
 }

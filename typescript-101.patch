@@ -1,0 +1,2507 @@
+diff --git a/bg/common.tsx b/bg/common.tsx
+index a164bad..81e365d 100644
+--- a/bg/common.tsx
++++ b/bg/common.tsx
+@@ -1,11 +1,307 @@
+-import { Glow, GridLines, Vignette } from "stagesmith";
++import { useEffect, useRef } from "react";
++
++/**
++ * Type Flow — the deck's living background (port of the standalone
++ * "Type Flow – VS Code & TypeScript" canvas).
++ *
++ * - Four flowing ribbons (two along the top, two along the bottom) whose
++ *   colour runs JS-yellow → sky → TS-blue left to right, breathing in
++ *   width and height on a 40s cycle with a travelling white sheen.
++ * - Mono code-token pairs ("var"→"const", "=="→"===", "any"→"<T>"…)
++ *   drift along the ribbons, swapping vocabulary at the centre line.
++ * - Bokeh bubbles + a fixed noise layer finish the sky.
++ * - Theme-aware: light = pastel sky (#EEF5FF), dark = deep ink navy.
++ * - Seeded RNG → every load renders the identical field.
++ * - Honours prefers-reduced-motion by painting one static frame.
++ */
++
++const TAU = Math.PI * 2;
++const T = 40;
++
++/* seeded RNG so every load looks the same */
++let seed = 20261021;
++const rnd = () => {
++  seed |= 0; seed = (seed + 0x6d2b79f5) | 0;
++  let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
++  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
++  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
++};
++
++/* colour ramp: JS yellow → sky → TS blue by horizontal position */
++const Y = [240, 192, 0], M = [142, 197, 240], B = [49, 120, 198];
++const mix = (a: number[], b: number[], k: number) => a.map((v, i) => v + (b[i] - v) * k);
++const clamp = (v: number, a = 0, b = 1) => Math.min(b, Math.max(a, v));
++const sstep = (a: number, b: number, v: number) => { const k = clamp((v - a) / (b - a)); return k * k * (3 - 2 * k); };
++const col = (x: number) => {
++  x = clamp(x);
++  return (x < 0.5 ? mix(Y, M, x / 0.5) : mix(M, B, (x - 0.5) / 0.5)).map(Math.round);
++};
++const rgba = (c: number[], a: number) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
++const frac = (v: number) => v - Math.floor(v);
++
++interface Ribbon {
++  b: number; w: number; s: number;
++  a: number[]; k: number[]; n: number[]; p: number[];
++  wk: number; wn: number; wp: number; ph: number; nt: number;
++  tok: { ph: number; lane: number; n: number; pair: [string, string]; sz: number; s1: number; s2: number; s3: number }[];
++}
++
++const PAIRS: [string, string][] = [
++  ["var", "const"], ["any", "string"], ["function", "=>"], ["==", "==="],
++  ["obj", "<T>"], ["{ }", "{ }"], ["?", "?."], ["()", "()"], ["[]", "[]"],
++  ["let", "type"], ["null", "null"], ["/>", "/>"], ["interface", "interface"],
++  ["{ }", "type"], ["=>", "=>"], ["<T>", "<T>"],
++];
++
++const R: Ribbon[] = [
++  { b: .075, w: .075, s: 1,  a: [.012, .007], k: [1, 3], n: [1, 2], p: [0, 1.7],  wk: 2, wn: 1, wp: .8,  ph: 0,   nt: 15, tok: [] },
++  { b: .19,  w: .05,  s: 1,  a: [.010, .006], k: [2, 4], n: [1, 3], p: [2.1, .4], wk: 3, wn: 2, wp: 2.4, ph: 1.3, nt: 11, tok: [] },
++  { b: .925, w: .075, s: -1, a: [.012, .007], k: [1, 3], n: [1, 2], p: [3.1, 4.4], wk: 2, wn: 1, wp: 3.9, ph: 0,   nt: 15, tok: [] },
++  { b: .81,  w: .05,  s: -1, a: [.010, .006], k: [2, 4], n: [1, 3], p: [5.2, 2.6], wk: 3, wn: 2, wp: 5.5, ph: 1.3, nt: 11, tok: [] },
++];
++R.forEach((r) => {
++  r.tok = Array.from({ length: r.nt }, (_, i) => ({
++    ph: (i + rnd() * .6) / r.nt,
++    lane: (rnd() - .5) * .8,
++    n: rnd() < .3 ? 2 : 1,
++    pair: PAIRS[Math.floor(rnd() * PAIRS.length)],
++    sz: .85 + rnd() * .35,
++    s1: rnd() * TAU, s2: rnd() * TAU, s3: rnd() * TAU,
++  }));
++});
++const BK = Array.from({ length: 40 }, () => ({ x: rnd(), ph: rnd(), r: 8 + rnd() * 26, s: rnd() * TAU, a: .12 + rnd() * .14 }));
++
++/* theme palettes */
++const PAL = {
++  light: {
++    bgStops: ["#FBFDFF", "#EEF5FF", "#D9E8FB", "#C4DBF6"],
++    centerGlow: "rgba(255,255,255,.85)",
++    ribbonA: .42, hairline: .75, edge: .9, sheen: .5,
++    innerTop: .6, innerMid: .14, innerBot: .03,
++    veil: ["rgba(251,253,255,.85)", "rgba(251,253,255,.55)"],
++    bokeh: 1, tokenA: .95, ring: .9,
++  },
++  dark: {
++    bgStops: ["#101A33", "#0A1020", "#070D1C", "#05080F"],
++    centerGlow: "rgba(90,166,240,.10)",
++    ribbonA: .21, hairline: .5, edge: .5, sheen: .22,
++    innerTop: .2, innerMid: .06, innerBot: .015,
++    veil: ["rgba(10,16,32,.85)", "rgba(10,16,32,.55)"],
++    bokeh: .45, tokenA: .8, ring: .5,
++  },
++} as const;
++
++type Pal = (typeof PAL)[keyof typeof PAL];
++
++export default function CommonBg({ style }: { style?: React.CSSProperties }) {
++  const ref = useRef<HTMLCanvasElement>(null);
++
++  useEffect(() => {
++    const cv = ref.current;
++    if (!cv) return;
++    const ctx = cv.getContext("2d");
++    if (!ctx) return;
++
++    let raf = 0;
++    let W = 0, H = 0, dpr = 1, sc = 1;
++    const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
++
++    /* fixed noise layer, ~2% alpha */
++    const nc = document.createElement("canvas");
++    nc.width = nc.height = 128;
++    const nx = nc.getContext("2d")!;
++    const id = nx.createImageData(128, 128);
++    for (let i = 0; i < id.data.length; i += 4) {
++      id.data[i] = id.data[i + 1] = id.data[i + 2] = rnd() * 255;
++      id.data[i + 3] = 5;
++    }
++    nx.putImageData(id, 0, 0);
++    const noise = ctx.createPattern(nc, "repeat")!;
++
++    const getTheme = (): "light" | "dark" => {
++      const el =
++        document.getElementById("root") ??
++        document.querySelector<HTMLElement>("[data-theme]");
++      return el?.getAttribute("data-theme") === "dark" ? "dark" : "light";
++    };
++
++    const cy = (r: Ribbon, u: number, t: number, h: number) => {
++      const a = (TAU * t) / T;
++      let y = r.b;
++      for (let i = 0; i < 2; i++) y += r.a[i] * Math.sin(TAU * r.k[i] * u - a * r.n[i] + r.p[i]);
++      return (y + r.s * .008 * Math.sin(a + r.ph)) * h;
++    };
++    const wd = (r: Ribbon, u: number, t: number, h: number) => {
++      const a = (TAU * t) / T;
++      return r.w * h * (1 + .28 * Math.sin(TAU * r.wk * u - a * r.wn + r.wp)) * (1 + r.s * .1 * Math.sin(a + r.ph + 1));
++    };
++    const X = (u: number, w: number) => (u * 1.1 - .05) * w;
++
++    function ribbon(r: Ribbon, t: number, pal: Pal) {
++      const N = 90, top: [number, number][] = [], bot: [number, number][] = [];
++      let mn = 1e9, mx = -1e9;
++      for (let i = 0; i <= N; i++) {
++        const u = i / N, x = X(u, W), c = cy(r, u, t, H), h = wd(r, u, t, H) / 2;
++        top.push([x, c - h]); bot.push([x, c + h]);
++        mn = Math.min(mn, c - h); mx = Math.max(mx, c + h);
++      }
++      const path = () => {
++        ctx!.beginPath(); ctx!.moveTo(top[0][0], top[0][1]);
++        for (let i = 1; i <= N; i++) ctx!.lineTo(top[i][0], top[i][1]);
++        for (let i = N; i >= 0; i--) ctx!.lineTo(bot[i][0], bot[i][1]);
++        ctx!.closePath();
++      };
++      const hg = (a: number) => {
++        const g = ctx!.createLinearGradient(0, 0, W, 0);
++        g.addColorStop(0, rgba(Y, a)); g.addColorStop(.5, rgba(M, a)); g.addColorStop(1, rgba(B, a));
++        return g;
++      };
++      path(); ctx!.fillStyle = hg(pal.ribbonA); ctx!.fill();
++      ctx!.save(); path(); ctx!.clip();
++      let g = ctx!.createLinearGradient(0, mn, 0, mx);
++      g.addColorStop(0, `rgba(255,255,255,${pal.innerTop})`);
++      g.addColorStop(.5, `rgba(255,255,255,${pal.innerMid})`);
++      g.addColorStop(1, `rgba(255,255,255,${pal.innerBot})`);
++      ctx!.fillStyle = g; ctx!.fillRect(0, mn, W, mx - mn);
++      const sw = W * .18, sx = -sw + frac(t / T + r.ph / TAU) * (W + 2 * sw);
++      g = ctx!.createLinearGradient(sx - sw, 0, sx + sw, 0);
++      g.addColorStop(0, "rgba(255,255,255,0)");
++      g.addColorStop(.5, `rgba(255,255,255,${pal.sheen})`);
++      g.addColorStop(1, "rgba(255,255,255,0)");
++      ctx!.fillStyle = g; ctx!.fillRect(0, mn, W, mx - mn);
++      ctx!.restore();
++      /* bright lower edge */
++      ctx!.save(); ctx!.beginPath(); ctx!.moveTo(bot[0][0], bot[0][1]);
++      for (let i = 1; i <= N; i++) ctx!.lineTo(bot[i][0], bot[i][1]);
++      ctx!.strokeStyle = `rgba(255,255,255,${pal.edge})`;
++      ctx!.lineWidth = Math.max(1.2, 2 * sc);
++      ctx!.shadowColor = `rgba(255,255,255,${pal.edge})`;
++      ctx!.shadowBlur = 6 * dpr; ctx!.stroke(); ctx!.restore();
++      /* fine coloured hairline on upper edge */
++      ctx!.beginPath(); ctx!.moveTo(top[0][0], top[0][1]);
++      for (let i = 1; i <= N; i++) ctx!.lineTo(top[i][0], top[i][1]);
++      ctx!.strokeStyle = hg(pal.hairline); ctx!.lineWidth = 1; ctx!.stroke();
++    }
++
++    function tokens(r: Ribbon, t: number, pal: Pal) {
++      const fs = Math.max(11, 20 * sc);
++      ctx!.textAlign = "center"; ctx!.textBaseline = "middle";
++      for (const k of r.tok) {
++        const u = frac(k.ph + k.n * t / T);
++        const edge = sstep(0, .07, u) * sstep(0, .07, 1 - u);
++        if (edge <= 0) continue;
++        let x = X(u, W), c = cy(r, u, t, H), h = wd(r, u, t, H), y = c + k.lane * h;
++        const c2 = cy(r, u + .003, t, H), ang0 = Math.atan2(c2 - c, X(u + .003, W) - x);
++        const xr = x / W, js = 1 - sstep(.3, .6, xr);
++        const ang = ang0 + js * .45 * Math.sin((TAU * 3 * t) / T + k.s1);
++        y += js * h * .12 * Math.sin((TAU * 4 * t) / T + k.s2);
++        x += js * 4 * sc * Math.sin((TAU * 5 * t) / T + k.s3);
++        const d = ((x - W / 2) / (W * .36)) ** 2 + ((y - H / 2) / (H * .27)) ** 2;
++        const vf = sstep(.7, 1.3, d);
++        const swap = .3 + .7 * Math.min(1, Math.abs(xr - .5) / .03);
++        const al = edge * vf * swap * pal.tokenA;
++        if (al < .01) continue;
++        const cc = col(xr), txt = xr < .5 ? k.pair[0] : k.pair[1];
++        ctx!.save(); ctx!.translate(x, y); ctx!.rotate(ang);
++        ctx!.font = `600 ${(fs * k.sz).toFixed(1)}px 'Cascadia Code','JetBrains Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace`;
++        ctx!.shadowColor = rgba(cc, al * .7); ctx!.shadowBlur = 9 * dpr;
++        ctx!.fillStyle = rgba(cc, al); ctx!.fillText(txt, 0, 0); ctx!.restore();
++      }
++    }
++
++    function draw(t: number, pal: Pal) {
++      ctx!.setTransform(dpr, 0, 0, dpr, 0, 0);
++      ctx!.clearRect(0, 0, W, H);
++      /* sky */
++      const cx = W / 2, cyy = H / 2;
++      let g = ctx!.createRadialGradient(cx, cyy, 0, cx, cyy, Math.hypot(W, H) / 2);
++      g.addColorStop(0, pal.bgStops[0]); g.addColorStop(.35, pal.bgStops[1]);
++      g.addColorStop(.7, pal.bgStops[2]); g.addColorStop(1, pal.bgStops[3]);
++      ctx!.fillStyle = g; ctx!.fillRect(0, 0, W, H);
++      g = ctx!.createRadialGradient(cx, cyy, 0, cx, cyy, W * .35);
++      g.addColorStop(0, pal.centerGlow); g.addColorStop(1, "rgba(255,255,255,0)");
++      ctx!.fillStyle = g; ctx!.fillRect(0, 0, W, H);
++      /* bokeh */
++      for (const b of BK) {
++        const f = frac(b.ph + t / T), s = Math.sin(Math.PI * f);
++        const a = b.a * s * s * (.7 + .3 * Math.sin((TAU * 2 * t) / T + b.s)) * pal.bokeh;
++        const x = b.x * W + 18 * sc * Math.sin((TAU * t) / T + b.s);
++        const y = H * (1.08 - 1.16 * f), rad = b.r * sc * 1.3;
++        const c = col(b.x);
++        const bg = ctx!.createRadialGradient(x, y, 0, x, y, rad);
++        bg.addColorStop(0, `rgba(255,255,255,${a * .8})`);
++        bg.addColorStop(.7, rgba(c, a * .6));
++        bg.addColorStop(1, rgba(c, 0));
++        ctx!.fillStyle = bg; ctx!.beginPath(); ctx!.arc(x, y, rad, 0, TAU); ctx!.fill();
++        ctx!.strokeStyle = `rgba(255,255,255,${a * pal.ring})`; ctx!.lineWidth = 1;
++        ctx!.beginPath(); ctx!.arc(x, y, rad * .85, 0, TAU); ctx!.stroke();
++      }
++      /* ribbons + tokens */
++      for (const r of R) { ribbon(r, t, pal); tokens(r, t, pal); }
++      /* elliptical veil keeps the centre clear */
++      ctx!.save(); ctx!.translate(cx, cyy);
++      const rx = W * .42, ry = H * .34; ctx!.scale(1, ry / rx);
++      g = ctx!.createRadialGradient(0, 0, 0, 0, 0, rx);
++      g.addColorStop(0, pal.veil[0]); g.addColorStop(.55, pal.veil[1]); g.addColorStop(1, "rgba(0,0,0,0)");
++      ctx!.fillStyle = g; ctx!.fillRect(-rx, -rx, rx * 2, rx * 2); ctx!.restore();
++      /* noise, fixed in device pixels */
++      ctx!.setTransform(1, 0, 0, 1, 0, 0);
++      ctx!.fillStyle = noise; ctx!.fillRect(0, 0, cv!.width, cv!.height);
++    }
++
++    let theme = getTheme();
++    const resize = () => {
++      const parent = cv.parentElement;
++      W = parent?.clientWidth || window.innerWidth;
++      H = parent?.clientHeight || window.innerHeight;
++      dpr = Math.min(window.devicePixelRatio || 1, 2);
++      sc = Math.min(W, H) / 1000;
++      cv.width = Math.round(W * dpr);
++      cv.height = Math.round(H * dpr);
++      if (reduce) draw(14, PAL[theme]);
++    };
++
++    const ro = new ResizeObserver(resize);
++    if (cv.parentElement) ro.observe(cv.parentElement);
++    resize();
++
++    /* follow theme switches (harness + smdeck runtime set data-theme) */
++    const mo = new MutationObserver(() => {
++      const next = getTheme();
++      if (next !== theme) {
++        theme = next;
++        if (reduce) draw(14, PAL[theme]);
++      }
++    });
++    mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"], subtree: true });
++
++    let last = performance.now();
++    const frame = (now: number) => {
++      const dt = now - last;
++      if (dt > 90) {
++        last = now;
++        draw((now / 1000) % T, PAL[theme]);
++      }
++      raf = requestAnimationFrame(frame);
++    };
++    if (!reduce) {
++      draw(0, PAL[theme]);
++      last = performance.now();
++      raf = requestAnimationFrame(frame);
++    }
++
++    return () => {
++      cancelAnimationFrame(raf);
++      ro.disconnect();
++      mo.disconnect();
++    };
++  }, []);
+ 
+-export default function CommonBg() {
+   return (
+-    <>
+-      <Glow />
+-      <GridLines />
+-      <Vignette strength={0.32} />
+-    </>
++    <canvas
++      ref={ref}
++      aria-hidden
++      style={{ position: "absolute", inset: 0, width: "100%", height: "100%", display: "block", pointerEvents: "none", ...style }}
++    />
+   );
+ }
+diff --git a/deck.json b/deck.json
+index 9b10c9d..df66031 100644
+--- a/deck.json
++++ b/deck.json
+@@ -2,15 +2,15 @@
+   "format": "smdeck",
+   "format_version": 1,
+   "id": "typescript-101",
+-  "title": "Typescript-101",
++  "title": "VS Code & TS — TypeScript 101: Modern Web Tooling",
+   "created": "2026-10-20T18:51:16.643Z",
+-  "modified": "2026-10-20T18:50:56.228Z",
++  "modified": "2026-10-21T00:00:00.000Z",
+   "settings": {
+     "size": [
+       1280,
+       720
+     ],
+-    "defaultMode": "dark",
++    "defaultMode": "light",
+     "transitionMs": 260,
+     "bgCrossfadeMs": 450
+   },
+@@ -25,11 +25,87 @@
+   "slides": [
+     {
+       "id": "title",
+-      "label": "Title"
++      "label": "VS Code & TS"
++    },
++    {
++      "id": "presenter",
++      "label": "Your Presenter"
++    },
++    {
++      "id": "agenda",
++      "label": "Agenda"
++    },
++    {
++      "id": "why",
++      "label": "Why Tooling?"
++    },
++    {
++      "id": "tooling",
++      "label": "VS Code at a Glance"
++    },
++    {
++      "id": "debug-setup",
++      "label": "Native Debugging"
++    },
++    {
++      "id": "breakpoints",
++      "label": "Breakpoint Toolkit"
++    },
++    {
++      "id": "debug-ts",
++      "label": "Debugging TypeScript"
++    },
++    {
++      "id": "linting",
++      "label": "Linting with ESLint"
++    },
++    {
++      "id": "format",
++      "label": "Format on Save"
++    },
++    {
++      "id": "basics",
++      "label": "What is TypeScript?"
++    },
++    {
++      "id": "inference",
++      "label": "Type Inference 101"
++    },
++    {
++      "id": "infer-fn",
++      "label": "Inference in Functions"
++    },
++    {
++      "id": "narrowing",
++      "label": "Narrowing"
++    },
++    {
++      "id": "tsconfig",
++      "label": "tsconfig & Strict Mode"
++    },
++    {
++      "id": "workflow",
++      "label": "The Daily Loop"
++    },
++    {
++      "id": "demo",
++      "label": "Live Demo"
++    },
++    {
++      "id": "pitfalls",
++      "label": "Common Pitfalls"
++    },
++    {
++      "id": "recap",
++      "label": "Recap"
++    },
++    {
++      "id": "resources",
++      "label": "Resources"
+     },
+     {
+       "id": "end",
+-      "label": "End"
++      "label": "Questions?"
+     }
+   ]
+ }
+diff --git a/notes/agenda.md b/notes/agenda.md
+new file mode 100644
+index 0000000..743c7c8
+--- /dev/null
++++ b/notes/agenda.md
+@@ -0,0 +1,3 @@
++# Agenda
++
++Walk the eight stops quickly. Promise: by the end they will debug without console.log, lint while typing, and let TypeScript do the typing — literally.
+diff --git a/notes/basics.md b/notes/basics.md
+new file mode 100644
+index 0000000..382b159
+--- /dev/null
++++ b/notes/basics.md
+@@ -0,0 +1,3 @@
++# What is TypeScript?
++
++Same greet function twice. In plain JS, greet(42) explodes at runtime with a TypeError. In TS, the `: string` annotation turns the same bug into a red squiggle before you even save. Superset: all valid JS is valid TS — types are checked, then erased.
+diff --git a/notes/breakpoints.md b/notes/breakpoints.md
+new file mode 100644
+index 0000000..d5c7baf
+--- /dev/null
++++ b/notes/breakpoints.md
+@@ -0,0 +1,3 @@
++# Breakpoint Toolkit
++
++Beyond the plain breakpoint: conditionals (stop only when qty < 0), logpoints (printf-debugging without editing code), hit counts (100th iteration), and exception breakpoints (catch the throw site). The stepping chips at the bottom complete the toolkit.
+diff --git a/notes/debug-setup.md b/notes/debug-setup.md
+new file mode 100644
+index 0000000..ec90c4b
+--- /dev/null
++++ b/notes/debug-setup.md
+@@ -0,0 +1,3 @@
++# Native Debugging
++
++launch.json is the only ceremony. Walk the fields: type node, request launch, program pointing at src/index.ts, preLaunchTask building first, outFiles + sourceMaps so breakpoints land on the .ts. Then F5 — the debugger pauses exactly on the red dot.
+diff --git a/notes/debug-ts.md b/notes/debug-ts.md
+new file mode 100644
+index 0000000..7a28834
+--- /dev/null
++++ b/notes/debug-ts.md
+@@ -0,0 +1,3 @@
++# Debugging TypeScript
++
++Runtime only ever sees JavaScript. Follow the flow: you write index.ts, tsc emits JS plus a .js.map, Node runs the JS, and VS Code uses the map to pause on your original .ts line. If breakpoints stay grey — sourceMap is the first suspect (see the pitfalls slide).
+diff --git a/notes/demo.md b/notes/demo.md
+new file mode 100644
+index 0000000..1931d8c
+--- /dev/null
++++ b/notes/demo.md
+@@ -0,0 +1,3 @@
++# Live Demo
++
++Four beats: scaffold with tsconfig, provoke a type error and an ESLint warning (Quick Fix both), set a conditional breakpoint and step through mapped code, then the inference tour — hover, generic, narrowing. Invite the audience to pick the order.
+diff --git a/notes/end.md b/notes/end.md
+new file mode 100644
+index 0000000..3b25250
+--- /dev/null
++++ b/notes/end.md
+@@ -0,0 +1,3 @@
++# Questions?
++
++Open the floor. Good starters if the room is quiet: "Who debugs with console.log today?" and "What would strict mode break in your codebase?" — then thank everyone and remind them: enable strict, press F5.
+diff --git a/notes/format.md b/notes/format.md
+new file mode 100644
+index 0000000..8707715
+--- /dev/null
++++ b/notes/format.md
+@@ -0,0 +1,3 @@
++# Format on Save
++
++Divide the labor: ESLint finds bugs and risky patterns; Prettier ends style debates. Committing .vscode/settings.json shares the setup with the whole team — formatOnSave, defaultFormatter, and fixAll.eslint are the three lines that matter.
+diff --git a/notes/infer-fn.md b/notes/infer-fn.md
+new file mode 100644
+index 0000000..2b64c0b
+--- /dev/null
++++ b/notes/infer-fn.md
+@@ -0,0 +1,3 @@
++# Inference in Functions
++
++Three flavors: return types are inferred from return statements; callback parameters get contextual types from the caller (map knows x is number); generics fill T in from the arguments you pass — first(["x","y"]) makes a string. Barely a type keyword in sight.
+diff --git a/notes/inference.md b/notes/inference.md
+new file mode 100644
+index 0000000..3b2c628
+--- /dev/null
++++ b/notes/inference.md
+@@ -0,0 +1,3 @@
++# Type Inference 101
++
++The headline: annotations are optional for locals. Hover each variable to see what TS inferred — count is number, name is the literal "Ada", tags is string[], user is the full object shape. Rule of thumb: infer locals, annotate boundaries (exports, parameters).
+diff --git a/notes/linting.md b/notes/linting.md
+new file mode 100644
+index 0000000..1e4455f
+--- /dev/null
++++ b/notes/linting.md
+@@ -0,0 +1,3 @@
++# Linting with ESLint
++
++Flat config on the left: @eslint/js recommended plus typescript-eslint's recommended (type-aware rules like no-explicit-any). On the right, the editor experience — squiggles appear while typing, and Ctrl+. opens Quick Fix. Set codeActionsOnSave to auto-fix.
+diff --git a/notes/narrowing.md b/notes/narrowing.md
+new file mode 100644
+index 0000000..d02ab22
+--- /dev/null
++++ b/notes/narrowing.md
+@@ -0,0 +1,3 @@
++# Narrowing
++
++Control flow refines types. Inside the typeof check, id is string; after it, number. The discriminated union (kind: "circle" | "square") is the pattern behind most real-world narrowing — switch on kind and every case gets the right shape.
+diff --git a/notes/pitfalls.md b/notes/pitfalls.md
+new file mode 100644
+index 0000000..69f99e1
+--- /dev/null
++++ b/notes/pitfalls.md
+@@ -0,0 +1,3 @@
++# Common Pitfalls
++
++The four live-demo killers: grey breakpoints (sourceMap/outFiles), silent ESLint (restart the server), stale types (select the workspace TS version), and everything-is-any (strict off). Screenshot this slide — it saves demos.
+diff --git a/notes/presenter.md b/notes/presenter.md
+new file mode 100644
+index 0000000..93350f5
+--- /dev/null
++++ b/notes/presenter.md
+@@ -0,0 +1,3 @@
++# Your Presenter
++
++Introduce yourself briefly. Tie your background to the three chips on screen. Keep it under 30 seconds — the agenda is next.
+diff --git a/notes/recap.md b/notes/recap.md
+new file mode 100644
+index 0000000..b6f0ca3
+--- /dev/null
++++ b/notes/recap.md
+@@ -0,0 +1,3 @@
++# Recap
++
++Four takeaways: debug natively (F5, breakpoints, source maps), lint continuously (ESLint + Prettier on save), trust inference (annotate boundaries), enable strict (one flag). Close with the quote: let the tools find the bug before your users do.
+diff --git a/notes/resources.md b/notes/resources.md
+new file mode 100644
+index 0000000..6551786
+--- /dev/null
++++ b/notes/resources.md
+@@ -0,0 +1,3 @@
++# Resources
++
++Hand these four links out: the Handbook (start at Everyday Types), the official VS Code debugging guide, typescript-eslint for the rules, and Microsoft Learn paths for structured practice.
+diff --git a/notes/title.md b/notes/title.md
+index b2a7440..7389746 100644
+--- a/notes/title.md
++++ b/notes/title.md
+@@ -1,4 +1,3 @@
+-Opening remarks for **Typescript-101**.
++# VS Code & TS — Title
+ 
+-- Say why you're here
+-- Set the one thing the audience should remember
++Welcome everyone. Frame the talk in one line: three habits — native debugging, linting, and type inference — that make JavaScript projects calmer. Mention it works for brand-new projects and old JS codebases alike.
+diff --git a/notes/tooling.md b/notes/tooling.md
+new file mode 100644
+index 0000000..42bf37b
+--- /dev/null
++++ b/notes/tooling.md
+@@ -0,0 +1,3 @@
++# VS Code at a Glance
++
++Everything shown today is built in: IntelliSense from the TypeScript language service (works in plain JS too), the Node/browser debugger, the Marketplace for ESLint/Prettier, and the integrated terminal. The three shortcuts at the bottom are worth their own applause.
+diff --git a/notes/tsconfig.md b/notes/tsconfig.md
+new file mode 100644
+index 0000000..00afb5f
+--- /dev/null
++++ b/notes/tsconfig.md
+@@ -0,0 +1,3 @@
++# tsconfig & Strict Mode
++
++The pragmatic config for 2025+: ES2022 target, Bundler resolution, sourceMap for debugging, and strict: true. Strict bundles strictNullChecks, noImplicitAny and friends — without them inference quietly degrades to any. One flag, trustworthy types.
+diff --git a/notes/why.md b/notes/why.md
+new file mode 100644
+index 0000000..474c55e
+--- /dev/null
++++ b/notes/why.md
+@@ -0,0 +1,3 @@
++# Why Tooling?
++
++The app.js snippet compiles and runs — and quietly returns NaN because of the `prise` typo. No error, no warning, until a user notices. That is the cost of "it runs on my machine". Shift left: move discovery from production to the editor.
+diff --git a/notes/workflow.md b/notes/workflow.md
+new file mode 100644
+index 0000000..233927c
+--- /dev/null
++++ b/notes/workflow.md
+@@ -0,0 +1,3 @@
++# The Daily Loop
++
++Zoom out: write with IntelliSense, lint on save, type-check with tsc --noEmit in CI, and drop into the F5 debugger for the hard ones. Each loop is minutes, not days — fast feedback beats late discovery.
+diff --git a/overlay/common.tsx b/overlay/common.tsx
+index bfe3154..7d6bd08 100644
+--- a/overlay/common.tsx
++++ b/overlay/common.tsx
+@@ -4,7 +4,7 @@ export default function CommonOverlay() {
+   return (
+     <>
+       <CornerMarks inset={20} />
+-      <Footer text="Chassé" />
++      <Footer text="VS Code & TS" />
+       <Progress />
+     </>
+   );
+diff --git a/slides/agenda.tsx b/slides/agenda.tsx
+new file mode 100644
+index 0000000..c0ac7a4
+--- /dev/null
++++ b/slides/agenda.tsx
+@@ -0,0 +1,48 @@
++/* 03 · Agenda */
++function Frame({ kick, title, children }: any) {
++  return (
++    <div style={{ position: "absolute", top: 92, left: 64, right: 64, bottom: 72, display: "flex", flexDirection: "column" }}>
++      <p className="an up" style={{ font: "700 12.5px var(--fm)", letterSpacing: ".22em", textTransform: "uppercase", color: "var(--ts)", margin: 0, display: "flex", alignItems: "center", gap: 10 }}>
++        <span className="idle-nudge" style={{ color: "var(--js)", fontWeight: 700 }}>{"</>"}</span>
++        {kick}
++      </p>
++      <h2 className="an up d1" style={{ font: "700 40px/1.08 var(--fd)", letterSpacing: "-.03em", color: "var(--ink)", margin: "10px 0 0" }}>{title}</h2>
++      <div className="an bar d2" style={{ display: "flex", gap: 6, marginTop: 14 }}>
++        <i className="idle-sheen" style={{ height: 5, borderRadius: 3, width: 52, background: "linear-gradient(90deg,var(--ts),var(--vs),var(--ts))", display: "block" }} />
++        <i style={{ height: 5, borderRadius: 3, width: 18, background: "var(--js)", display: "block" }} />
++      </div>
++      <div style={{ flex: 1, minHeight: 0, marginTop: 24, display: "flex", flexDirection: "column" }}>{children}</div>
++    </div>
++  );
++}
++
++const ITEMS: [string, string, string][] = [
++  ["01", "Why tooling?", "The cost of “it runs on my machine”"],
++  ["02", "VS Code essentials", "Editor, terminal, extensions"],
++  ["03", "Native debugging", "Breakpoints, launch.json, source maps"],
++  ["04", "Linting", "ESLint + typescript-eslint, format on save"],
++  ["05", "TypeScript 101", "Types, compile flow, strict mode"],
++  ["06", "Type inference", "What TS figures out so you don’t have to"],
++  ["07", "Live demo", "Break it, catch it, fix it"],
++  ["08", "Recap & Q&A", "Takeaways and resources"],
++];
++
++export default function Slide() {
++  return (
++    <Frame kick="Today" title="What we’ll cover">
++      <div className="stag poppy" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px 22px", marginTop: 8 }}>
++        {ITEMS.map(([n, h, p]) => (
++          <div key={n} style={{ display: "grid", gridTemplateColumns: "44px 1fr", gap: 14, alignItems: "center", background: "var(--card)", border: "1px solid var(--line)", borderRadius: 12, padding: "13px 16px", boxShadow: "var(--shadow)" }}>
++            <span style={{ width: 42, height: 42, borderRadius: 10, background: Number(n) % 2 === 0 ? "var(--js)" : "var(--ts)", color: Number(n) % 2 === 0 ? "#1b1b1b" : "#fff", display: "grid", placeItems: "center", font: "700 15px var(--fm)" }}>
++              {n}
++            </span>
++            <div>
++              <h4 style={{ font: "600 17px var(--fd)", color: "var(--ink)", margin: 0 }}>{h}</h4>
++              <p style={{ font: "400 13px/1.35 var(--fb)", color: "var(--mut)", margin: "2px 0 0" }}>{p}</p>
++            </div>
++          </div>
++        ))}
++      </div>
++    </Frame>
++  );
++}
+diff --git a/slides/basics.tsx b/slides/basics.tsx
+new file mode 100644
+index 0000000..b367b96
+--- /dev/null
++++ b/slides/basics.tsx
+@@ -0,0 +1,95 @@
++/* 11 · What is TypeScript? — JavaScript, with a safety net */
++
++const Kw = (p: any) => <span style={{ color: "var(--tk-k)" }}>{p.children}</span>;
++const F = (p: any) => <span style={{ color: "var(--tk-d)" }}>{p.children}</span>;
++const V = (p: any) => <span style={{ color: "var(--tk-f)" }}>{p.children}</span>;
++const S = (p: any) => <span style={{ color: "var(--tk-str)" }}>{p.children}</span>;
++const N = (p: any) => <span style={{ color: "var(--tk-n)" }}>{p.children}</span>;
++const Cm = (p: any) => <span style={{ color: "var(--tk-cm)", fontStyle: "italic" }}>{p.children}</span>;
++const Ty = (p: any) => <span style={{ color: "var(--tk-t)" }}>{p.children}</span>;
++
++function Code({ file, lang, size = 15, style, children }: any) {
++  const lines: any[][] = [[]];
++  const kids: any[] = Array.isArray(children) ? children : [children];
++  for (const c of kids) {
++    if (typeof c === "string") {
++      (c as string).split("\n").forEach((p, i) => {
++        if (i > 0) lines.push([]);
++        if (p) lines[lines.length - 1].push(p);
++      });
++    } else {
++      lines[lines.length - 1].push(c);
++    }
++  }
++  const clen = (xs: any[]): number =>
++    xs.reduce((n, x) => n + (typeof x === "string" ? x.length : clen(Array.isArray(x.props.children) ? x.props.children : [x.props.children])), 0);
++  let t = 0.55;
++  return (
++    <div className="code" style={style}>
++      <div className="code-bar"><i /><i /><i /><b>{file}</b><em className={lang === "js" ? "js" : ""}>{(lang || "ts").toUpperCase()}</em></div>
++      <div className="idle-scan" />
++      <pre style={{ fontSize: size, padding: "13px 16px" }}>
++        {lines.map((ln, i) => {
++          const n = Math.max(4, clen(ln));
++          const d = t;
++          t += n * 0.011 + 0.045;
++          return (
++            <div className="tlw" key={i}>
++              {ln.length === 0 ? "\u00A0" : <span className="tl" style={{ "--n": n, "--d": `${d.toFixed(2)}s` } as any}>{ln}</span>}
++            </div>
++          );
++        })}
++      </pre>
++    </div>
++  );
++}
++
++function Tag({ ts }: { ts?: boolean }) {
++  return (
++    <span style={{ font: "700 12px var(--fm)", letterSpacing: ".18em", textTransform: "uppercase", color: ts ? "var(--ts-deep)" : "#8f7400", display: "inline-flex", alignItems: "center", gap: 8 }}>
++      <i className="idle-pulse" style={{ width: 8, height: 8, borderRadius: 2, background: ts ? "var(--ts)" : "var(--js)", display: "inline-block" }} />
++      {ts ? "TypeScript" : "JavaScript"}
++    </span>
++  );
++}
++
++export default function Slide() {
++  return (
++    <div style={{ position: "absolute", top: 92, left: 64, right: 64, bottom: 72, display: "flex", flexDirection: "column" }}>
++      <p className="an up" style={{ font: "700 12.5px var(--fm)", letterSpacing: ".22em", textTransform: "uppercase", color: "var(--ts)", margin: 0, display: "flex", alignItems: "center", gap: 10 }}>
++        <span className="idle-nudge" style={{ color: "var(--js)", fontWeight: 700 }}>{"</>"}</span>
++        TypeScript
++      </p>
++      <h2 className="an up d1" style={{ font: "700 40px/1.08 var(--fd)", letterSpacing: "-.03em", color: "var(--ink)", margin: "10px 0 0" }}>
++        JavaScript, <span className="grad idle-text-sheen">with a safety net</span>
++      </h2>
++      <div className="an bar d2" style={{ display: "flex", gap: 6, marginTop: 14 }}>
++        <i className="idle-sheen" style={{ height: 5, borderRadius: 3, width: 52, background: "linear-gradient(90deg,var(--ts),var(--vs),var(--ts))", display: "block" }} />
++        <i style={{ height: 5, borderRadius: 3, width: 18, background: "var(--js)", display: "block" }} />
++      </div>
++      <p className="an up d3" style={{ font: "400 18px/1.5 var(--fb)", color: "var(--mut)", margin: "13px 0 0", maxWidth: 1000 }}>
++        A superset of JavaScript: valid JS is valid TS. Types are checked at build time, then erased.
++      </p>
++
++      <div className="stag" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 26, marginTop: 22 }}>
++        <div>
++          <Tag />
++          <Code file="greet.js" lang="js" size={15} style={{ marginTop: 10 }}>
++            <Kw>{"function "}</Kw><F>greet</F>{"(name) {\n  "}<Kw>{"return "}</Kw><S>{'"Hi "'}</S>{" + name."}<F>toUpperCase</F>{"();\n}\n"}<F>greet</F>{"("}<N>42</N>{");\n"}<Cm>{"// 💥 TypeError at runtime"}</Cm>
++          </Code>
++        </div>
++        <div>
++          <Tag ts />
++          <Code file="greet.ts" lang="ts" size={15} style={{ marginTop: 10 }}>
++            <Kw>{"function "}</Kw><F>greet</F>{"(name: "}<Ty>string</Ty>{") {\n  "}<Kw>{"return "}</Kw><S>{'"Hi "'}</S>{" + name."}<F>toUpperCase</F>{"();\n}\n"}<F>greet</F>{"("}<span className="squig" style={{ backgroundColor: "rgba(244,71,71,.18)" }}><N>42</N></span>{");"}
++          </Code>
++          <div className="code" style={{ marginTop: 8, boxShadow: "none" }}>
++            <div style={{ padding: "6px 14px 8px" }}>
++              <span className="hint">✖ Argument of type 'number' is not assignable to 'string'.</span>
++            </div>
++          </div>
++        </div>
++      </div>
++    </div>
++  );
++}
+diff --git a/slides/breakpoints.tsx b/slides/breakpoints.tsx
+new file mode 100644
+index 0000000..6f84122
+--- /dev/null
++++ b/slides/breakpoints.tsx
+@@ -0,0 +1,49 @@
++/* 07 · Breakpoint Toolkit — breakpoints that think */
++
++const ROWS: [string, any, string][] = [
++  ["Breakpoint", <>Click the gutter · <code className="i">F9</code></>, "You want to stop on a line"],
++  ["Conditional", <>Right-click → <code className="i">Expression</code></>, <>Only stop when e.g. <code className="i">item.qty &lt; 0</code></>],
++  ["Logpoint", <>Right-click → <code className="i">Log Message</code></>, "Print values without editing code"],
++  ["Hit count", <>Right-click → <code className="i">Hit Count</code></>, "Stop on the 100th loop iteration"],
++  ["Exception", <>Breakpoints panel → <code className="i">Uncaught</code></>, "Find where an error is thrown"],
++];
++
++export default function Slide() {
++  return (
++    <div style={{ position: "absolute", top: 92, left: 64, right: 64, bottom: 72, display: "flex", flexDirection: "column" }}>
++      <p className="an up" style={{ font: "700 12.5px var(--fm)", letterSpacing: ".22em", textTransform: "uppercase", color: "var(--ts)", margin: 0, display: "flex", alignItems: "center", gap: 10 }}>
++        <span className="idle-nudge" style={{ color: "var(--js)", fontWeight: 700 }}>{"</>"}</span>
++        Debugging
++      </p>
++      <h2 className="an up d1" style={{ font: "700 40px/1.08 var(--fd)", letterSpacing: "-.03em", color: "var(--ink)", margin: "10px 0 0" }}>Breakpoints that think</h2>
++      <div className="an bar d2" style={{ display: "flex", gap: 6, marginTop: 14 }}>
++        <i className="idle-sheen" style={{ height: 5, borderRadius: 3, width: 52, background: "linear-gradient(90deg,var(--ts),var(--vs),var(--ts))", display: "block" }} />
++        <i style={{ height: 5, borderRadius: 3, width: 18, background: "var(--js)", display: "block" }} />
++      </div>
++
++      <div className="an up d3" style={{ marginTop: 24 }}>
++        <table className="tbl">
++          <thead>
++            <tr><th style={{ width: "22%" }}>Type</th><th style={{ width: "42%" }}>How</th><th>Use it when…</th></tr>
++          </thead>
++          <tbody>
++            {ROWS.map(([a, b, c], i) => (
++              <tr key={i}>
++                <td><span className="bp idle-pulse" style={{ width: 9, height: 9 }} />{a}</td>
++                <td>{b}</td>
++                <td style={{ color: "var(--mut)" }}>{c}</td>
++              </tr>
++            ))}
++          </tbody>
++        </table>
++      </div>
++
++      <div className="an up d8" style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 24 }}>
++        <span className="chip">F10 Step over</span>
++        <span className="chip">F11 Step into</span>
++        <span className="chip js">Shift+F11 Step out</span>
++        <span className="chip">F5 Continue</span>
++      </div>
++    </div>
++  );
++}
+diff --git a/slides/debug-setup.tsx b/slides/debug-setup.tsx
+new file mode 100644
+index 0000000..f90ebb8
+--- /dev/null
++++ b/slides/debug-setup.tsx
+@@ -0,0 +1,97 @@
++/* 06 · Native Debugging — F5 and go */
++
++const Kw = (p: any) => <span style={{ color: "var(--tk-p)" }}>{p.children}</span>;
++const V = (p: any) => <span style={{ color: "var(--tk-f)" }}>{p.children}</span>;
++const S = (p: any) => <span style={{ color: "var(--tk-str)" }}>{p.children}</span>;
++const N = (p: any) => <span style={{ color: "var(--tk-n)" }}>{p.children}</span>;
++
++function Code({ file, lang, size = 15, style, children }: any) {
++  const lines: any[][] = [[]];
++  const kids: any[] = Array.isArray(children) ? children : [children];
++  for (const c of kids) {
++    if (typeof c === "string") {
++      (c as string).split("\n").forEach((p, i) => {
++        if (i > 0) lines.push([]);
++        if (p) lines[lines.length - 1].push(p);
++      });
++    } else {
++      lines[lines.length - 1].push(c);
++    }
++  }
++  const clen = (xs: any[]): number =>
++    xs.reduce((n, x) => n + (typeof x === "string" ? x.length : clen(Array.isArray(x.props.children) ? x.props.children : [x.props.children])), 0);
++  let t = 0.55;
++  return (
++    <div className="code" style={style}>
++      <div className="code-bar"><i /><i /><i /><b>{file}</b><em className={lang === "js" ? "js" : ""}>{(lang || "ts").toUpperCase()}</em></div>
++      <div className="idle-scan" />
++      <pre style={{ fontSize: size, padding: "13px 16px" }}>
++        {lines.map((ln, i) => {
++          const n = Math.max(4, clen(ln));
++          const d = t;
++          t += n * 0.011 + 0.045;
++          return (
++            <div className="tlw" key={i}>
++              {ln.length === 0 ? "\u00A0" : <span className="tl" style={{ "--n": n, "--d": `${d.toFixed(2)}s` } as any}>{ln}</span>}
++            </div>
++          );
++        })}
++      </pre>
++    </div>
++  );
++}
++
++function Row({ icon, h, children }: any) {
++  return (
++    <div style={{ display: "grid", gridTemplateColumns: "48px 1fr", gap: 15, padding: "13px 16px", background: "var(--card)", border: "1px solid var(--line)", borderRadius: 12, boxShadow: "var(--shadow)", alignItems: "center" }}>
++      <span style={{ width: 46, height: 46, borderRadius: 11, display: "grid", placeItems: "center", background: "var(--ts-soft)", color: "var(--ts)" }}>{icon}</span>
++      <div>
++        <h4 style={{ font: "600 16.5px var(--fd)", color: "var(--ink)", margin: 0 }}>{h}</h4>
++        <p style={{ font: "400 13.5px/1.45 var(--fb)", color: "var(--mut)", margin: "3px 0 0" }}>{children}</p>
++      </div>
++    </div>
++  );
++}
++
++const Ic = ({ children, size = 22 }: any) => (
++  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>{children}</svg>
++);
++
++export default function Slide() {
++  return (
++    <div style={{ position: "absolute", top: 92, left: 64, right: 64, bottom: 72, display: "flex", flexDirection: "column" }}>
++      <p className="an up" style={{ font: "700 12.5px var(--fm)", letterSpacing: ".22em", textTransform: "uppercase", color: "var(--ts)", margin: 0, display: "flex", alignItems: "center", gap: 10 }}>
++        <span className="idle-nudge" style={{ color: "var(--js)", fontWeight: 700 }}>{"</>"}</span>
++        Debugging
++      </p>
++      <h2 className="an up d1" style={{ font: "700 40px/1.08 var(--fd)", letterSpacing: "-.03em", color: "var(--ink)", margin: "10px 0 0" }}>
++        Debug without <code className="i">console.log</code>
++      </h2>
++      <div className="an bar d2" style={{ display: "flex", gap: 6, marginTop: 14 }}>
++        <i className="idle-sheen" style={{ height: 5, borderRadius: 3, width: 52, background: "linear-gradient(90deg,var(--ts),var(--vs),var(--ts))", display: "block" }} />
++        <i style={{ height: 5, borderRadius: 3, width: 18, background: "var(--js)", display: "block" }} />
++      </div>
++      <p className="an up d3" style={{ font: "400 18px/1.5 var(--fb)", color: "var(--mut)", margin: "13px 0 0", maxWidth: 1000 }}>
++        Press <code className="i">F5</code> — VS Code attaches Node’s inspector and pauses where you ask.
++      </p>
++
++      <div className="stag" style={{ display: "grid", gridTemplateColumns: "1.12fr 1fr", gap: 26, alignItems: "start", marginTop: 18 }}>
++        <Code file=".vscode/launch.json" lang="json" size={14.5}>
++          {"{\n  "}<V>{'"version"'}</V>{": "}<S>{'"0.2.0"'}</S>{",\n  "}<V>{'"configurations"'}</V>{": [\n    "}<Kw>{"{"}</Kw>{"\n      "}
++          <V>{'"type"'}</V>{": "}<S>{'"node"'}</S>{",\n      "}
++          <V>{'"request"'}</V>{": "}<S>{'"launch"'}</S>{",\n      "}
++          <V>{'"name"'}</V>{": "}<S>{'"Run app"'}</S>{",\n      "}
++          <V>{'"program"'}</V>{": "}<S>{'"${workspaceFolder}/src/index.ts"'}</S>{",\n      "}
++          <V>{'"preLaunchTask"'}</V>{": "}<S>{'"tsc: build"'}</S>{",\n      "}
++          <V>{'"outFiles"'}</V>{": ["}<S>{'"${workspaceFolder}/dist/**/*.js"'}</S>{"],\n      "}
++          <V>{'"sourceMaps"'}</V>{": "}<N>{"true"}</N>{"\n    "}<Kw>{"}"}</Kw>{"\n  ]\n}"}
++        </Code>
++        <div className="stag sb" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
++          <Row icon={<Ic><path d="M6 4l14 8-14 8z" /></Ic>} h="F5 to launch">Start with the “Run app” configuration.</Row>
++          <Row icon={<Ic><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="4" /><circle cx="12" cy="12" r="0.5" /></Ic>} h="Pause where it matters"><span className="bp idle-pulse" style={{ width: 10, height: 10 }} />Click the gutter to set a breakpoint.</Row>
++          <Row icon={<Ic><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="3" /></Ic>} h="Inspect live state">Variables, Watch and Call Stack panels.</Row>
++        </div>
++      </div>
++    </div>
++  );
++}
+diff --git a/slides/debug-ts.tsx b/slides/debug-ts.tsx
+new file mode 100644
+index 0000000..8fd8771
+--- /dev/null
++++ b/slides/debug-ts.tsx
+@@ -0,0 +1,60 @@
++/* 08 · Debugging TypeScript — source maps flow */
++
++const Ic = ({ children, size = 24, style }: any) => (
++  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" style={style} aria-hidden>{children}</svg>
++);
++
++function Step({ no, icon, h, p, y }: any) {
++  return (
++    <div style={{ flex: 1, border: "1px solid var(--line)", borderTop: `4px solid ${y ? "var(--js)" : "var(--ts)"}`, borderRadius: 12, padding: "15px 16px", background: "var(--card)", boxShadow: "var(--shadow)", position: "relative", minWidth: 0 }}>
++      <span style={{ position: "absolute", top: 10, right: 13, font: "600 11px var(--fm)", color: "var(--faint)" }}>{no}</span>
++      <span className="idle-float" style={{ color: y ? "#B58F00" : "var(--ts)", display: "block" }}>{icon}</span>
++      <h4 style={{ font: "600 16.5px var(--fd)", color: "var(--ink)", margin: "9px 0 4px" }}>{h}</h4>
++      <p style={{ font: "400 13px/1.45 var(--fb)", color: "var(--mut)", margin: 0 }}>{p}</p>
++    </div>
++  );
++}
++
++const Sep = () => (
++  <div style={{ flex: "none", width: 30, display: "grid", placeItems: "center", color: "var(--faint)" }}>
++    <Ic size={19}><path d="M5 12h14M13 6l6 6-6 6" /></Ic>
++  </div>
++);
++
++export default function Slide() {
++  return (
++    <div style={{ position: "absolute", top: 92, left: 64, right: 64, bottom: 72, display: "flex", flexDirection: "column" }}>
++      <p className="an up" style={{ font: "700 12.5px var(--fm)", letterSpacing: ".22em", textTransform: "uppercase", color: "var(--ts)", margin: 0, display: "flex", alignItems: "center", gap: 10 }}>
++        <span className="idle-nudge" style={{ color: "var(--js)", fontWeight: 700 }}>{"</>"}</span>
++        Debugging
++      </p>
++      <h2 className="an up d1" style={{ font: "700 40px/1.08 var(--fd)", letterSpacing: "-.03em", color: "var(--ink)", margin: "10px 0 0" }}>
++        Source maps: debug the <span style={{ background: "linear-gradient(transparent 62%, var(--js-soft) 62%)", padding: "0 .12em" }}>.ts</span>, not the .js
++      </h2>
++      <div className="an bar d2" style={{ display: "flex", gap: 6, marginTop: 14 }}>
++        <i className="idle-sheen" style={{ height: 5, borderRadius: 3, width: 52, background: "linear-gradient(90deg,var(--ts),var(--vs),var(--ts))", display: "block" }} />
++        <i style={{ height: 5, borderRadius: 3, width: 18, background: "var(--js)", display: "block" }} />
++      </div>
++      <p className="an up d3" style={{ font: "400 18px/1.5 var(--fb)", color: "var(--mut)", margin: "13px 0 0", maxWidth: 1000 }}>
++        The browser and Node run JavaScript — maps connect it back to what you wrote.
++      </p>
++
++      <div className="stag" style={{ display: "flex", alignItems: "stretch", marginTop: 24 }}>
++        <Step no="01" y={false} icon={<Ic><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></Ic>} h="index.ts" p="The code you write and set breakpoints in." />
++        <Sep />
++        <Step no="02" y icon={<Ic><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1" /></Ic>} h="tsc" p={<>Compiles to JS and emits <code className="i">.js.map</code>.</>} />
++        <Sep />
++        <Step no="03" icon={<Ic><path d="M6 4l14 8-14 8z" /></Ic>} h="Node / Browser" p="Runs the plain JavaScript output." />
++        <Sep />
++        <Step no="04" icon={<Ic><circle cx="12" cy="13" r="5" /><path d="M12 8V6M8.5 9.5 6 7M15.5 9.5 18 7M7 13H4M20 13h-3M8.5 16.5 6 19M15.5 16.5 18 19" /></Ic>} h="VS Code" p="Maps the paused line back to your .ts." />
++      </div>
++
++      <div className="an up d9" style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 22, font: "500 15px var(--fm)", color: "var(--mut)" }}>
++        <span className="idle-pulse" style={{ color: "var(--ok)", display: "inline-flex" }}>
++          <Ic size={19}><path d="m4 12.5 5 5L20 6.5" /></Ic>
++        </span>
++        <span>Needs <code className="i">"sourceMap": true</code> in tsconfig.json</span>
++      </div>
++    </div>
++  );
++}
+diff --git a/slides/demo.tsx b/slides/demo.tsx
+new file mode 100644
+index 0000000..d816609
+--- /dev/null
++++ b/slides/demo.tsx
+@@ -0,0 +1,51 @@
++/* 17 · Live Demo — break it, catch it, fix it */
++
++const Ic = ({ children, size = 25 }: any) => (
++  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>{children}</svg>
++);
++
++function Card({ y, icon, h, children }: any) {
++  return (
++    <div style={{ position: "relative", background: "var(--card)", border: "1px solid var(--line)", borderRadius: 14, padding: "17px 18px", boxShadow: "var(--shadow)", overflow: "hidden" }}>
++      <span style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 4, background: y ? "var(--js)" : "var(--ts)" }} />
++      <span className="idle-float" style={{ color: y ? "#B58F00" : "var(--ts)", display: "inline-flex" }}>{icon}</span>
++      <h4 style={{ font: "600 18px var(--fd)", color: "var(--ink)", margin: "10px 0 5px" }}>{h}</h4>
++      <p style={{ font: "400 14px/1.5 var(--fb)", color: "var(--mut)", margin: 0 }}>{children}</p>
++    </div>
++  );
++}
++
++export default function Slide() {
++  return (
++    <div style={{ position: "absolute", top: 92, left: 64, right: 64, bottom: 72, display: "flex", flexDirection: "column" }}>
++      <p className="an up" style={{ font: "700 12.5px var(--fm)", letterSpacing: ".22em", textTransform: "uppercase", color: "var(--ts)", margin: 0, display: "flex", alignItems: "center", gap: 10 }}>
++        <span className="idle-nudge" style={{ color: "var(--js)", fontWeight: 700 }}>{"</>"}</span>
++        Demo
++      </p>
++      <h2 className="an up d1" style={{ font: "700 40px/1.08 var(--fd)", letterSpacing: "-.03em", color: "var(--ink)", margin: "10px 0 0" }}>Break it. Catch it. Fix it.</h2>
++      <div className="an bar d2" style={{ display: "flex", gap: 6, marginTop: 14 }}>
++        <i className="idle-sheen" style={{ height: 5, borderRadius: 3, width: 52, background: "linear-gradient(90deg,var(--ts),var(--vs),var(--ts))", display: "block" }} />
++        <i style={{ height: 5, borderRadius: 3, width: 18, background: "var(--js)", display: "block" }} />
++      </div>
++
++      <div className="stag poppy" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginTop: 26 }}>
++        <Card icon={<Ic><path d="m4 17 6-5-6-5M12 19h8" /></Ic>} h="Scaffold">
++          <code className="i">npm init -y</code> → install <code className="i">typescript</code> and <code className="i">eslint</code>; add tsconfig.
++        </Card>
++        <Card y icon={<Ic><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" /><path d="M12 9v4M12 17h.01" /></Ic>} h="See the errors">
++          Trigger a type error and an ESLint warning; use Quick Fix.
++        </Card>
++        <Card icon={<Ic><circle cx="12" cy="13" r="5" /><path d="M12 8V6M8.5 9.5 6 7M15.5 9.5 18 7M7 13H4M20 13h-3M8.5 16.5 6 19M15.5 16.5 18 19" /></Ic>} h="Debug">
++          Set a conditional breakpoint; step through a mapped .ts file.
++        </Card>
++        <Card y icon={<Ic><path d="M12 3l2.1 5.6L20 11l-5.9 2.4L12 19l-2.1-5.6L4 11l5.9-2.4z" /></Ic>} h="Inference tour">
++          Hover variables, add a generic, narrow a union.
++        </Card>
++      </div>
++
++      <div className="an up d8" style={{ marginTop: 22, alignSelf: "center", padding: "9px 20px", borderRadius: 999, border: "1px dashed var(--border-strong)", color: "var(--mut)", font: "500 13.5px var(--fm)" }}>
++        live terminal on the side — stop me at any step
++      </div>
++    </div>
++  );
++}
+diff --git a/slides/end.tsx b/slides/end.tsx
+index 13b6130..681be39 100644
+--- a/slides/end.tsx
++++ b/slides/end.tsx
+@@ -1,27 +1,27 @@
++/* 21 · End — Questions? */
++
+ export default function Slide() {
+   return (
+-    <div
+-      style={{
+-        position: "absolute",
+-        inset: 0,
+-        display: "flex",
+-        flexDirection: "column",
+-        alignItems: "center",
+-        justifyContent: "center",
+-        gap: 18,
+-      }}
+-    >
+-      <h1
+-        style={{
+-          font: "700 96px/1 var(--fd)",
+-          letterSpacing: "-.045em",
+-          color: "var(--ink)",
+-          margin: 0,
+-        }}
+-      >
+-        Thank you
++    <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center" }}>
++      <span className="glyph idle-drift" style={{ top: 100, left: 110, fontSize: 40 }}>{"?. "}</span>
++      <span className="glyph t idle-drift" style={{ top: 160, right: 130, fontSize: 36, animationDelay: "-2.5s" }}>{"=> "}</span>
++      <span className="glyph w idle-drift" style={{ bottom: 140, left: 160, fontSize: 34, animationDelay: "-4s" }}>{"<T> "}</span>
++      <span className="glyph idle-drift" style={{ bottom: 180, right: 110, fontSize: 42, animationDelay: "-1.5s" }}>{"{ }"}</span>
++
++      <p className="an up" style={{ font: "700 12.5px var(--fm)", letterSpacing: ".22em", textTransform: "uppercase", color: "var(--ts)", margin: 0, display: "flex", alignItems: "center", gap: 10 }}>
++        <span className="idle-nudge" style={{ color: "var(--js)", fontWeight: 700 }}>{"</>"}</span>
++        Closing
++      </p>
++      <h1 className="an pop d1" style={{ font: "800 92px/1.05 var(--fd)", letterSpacing: "-.045em", margin: "20px 0 0", color: "var(--ink)" }}>
++        <span className="grad idle-text-sheen">Questions?</span>
+       </h1>
+-      <p style={{ font: "400 22px var(--fb)", color: "var(--mut)" }}>Questions?</p>
++      <p className="an up d4" style={{ font: "400 20px/1.5 var(--fb)", color: "var(--mut)", margin: "18px 0 0", maxWidth: 560 }}>
++        Thank you — now go enable <code className="i">strict</code> and press <kbd>F5</kbd>.
++      </p>
++      <div className="an up d6" style={{ display: "flex", gap: 10, marginTop: 28 }}>
++        <span className="chip js">JavaScript / TS</span>
++        <span className="chip">VS Code &amp; TS</span>
++      </div>
+     </div>
+   );
+ }
+diff --git a/slides/format.tsx b/slides/format.tsx
+new file mode 100644
+index 0000000..a61f4ab
+--- /dev/null
++++ b/slides/format.tsx
+@@ -0,0 +1,88 @@
++/* 10 · Format on Save — settings that do the boring work */
++
++const Kw = (p: any) => <span style={{ color: "var(--tk-p)" }}>{p.children}</span>;
++const V = (p: any) => <span style={{ color: "var(--tk-f)" }}>{p.children}</span>;
++const S = (p: any) => <span style={{ color: "var(--tk-str)" }}>{p.children}</span>;
++const N = (p: any) => <span style={{ color: "var(--tk-n)" }}>{p.children}</span>;
++
++function Code({ file, lang, size = 15, style, children }: any) {
++  const lines: any[][] = [[]];
++  const kids: any[] = Array.isArray(children) ? children : [children];
++  for (const c of kids) {
++    if (typeof c === "string") {
++      (c as string).split("\n").forEach((p, i) => {
++        if (i > 0) lines.push([]);
++        if (p) lines[lines.length - 1].push(p);
++      });
++    } else {
++      lines[lines.length - 1].push(c);
++    }
++  }
++  const clen = (xs: any[]): number =>
++    xs.reduce((n, x) => n + (typeof x === "string" ? x.length : clen(Array.isArray(x.props.children) ? x.props.children : [x.props.children])), 0);
++  let t = 0.55;
++  return (
++    <div className="code" style={style}>
++      <div className="code-bar"><i /><i /><i /><b>{file}</b><em className={lang === "js" ? "js" : ""}>{(lang || "ts").toUpperCase()}</em></div>
++      <div className="idle-scan" />
++      <pre style={{ fontSize: size, padding: "13px 16px" }}>
++        {lines.map((ln, i) => {
++          const n = Math.max(4, clen(ln));
++          const d = t;
++          t += n * 0.011 + 0.045;
++          return (
++            <div className="tlw" key={i}>
++              {ln.length === 0 ? "\u00A0" : <span className="tl" style={{ "--n": n, "--d": `${d.toFixed(2)}s` } as any}>{ln}</span>}
++            </div>
++          );
++        })}
++      </pre>
++    </div>
++  );
++}
++
++function Row({ icon, h, children }: any) {
++  return (
++    <div style={{ display: "grid", gridTemplateColumns: "48px 1fr", gap: 15, padding: "13px 16px", background: "var(--card)", border: "1px solid var(--line)", borderRadius: 12, boxShadow: "var(--shadow)", alignItems: "center" }}>
++      <span style={{ width: 46, height: 46, borderRadius: 11, display: "grid", placeItems: "center", background: "var(--ts-soft)", color: "var(--ts)" }}>{icon}</span>
++      <div>
++        <h4 style={{ font: "600 16.5px var(--fd)", color: "var(--ink)", margin: 0 }}>{h}</h4>
++        <p style={{ font: "400 13.5px/1.45 var(--fb)", color: "var(--mut)", margin: "3px 0 0" }}>{children}</p>
++      </div>
++    </div>
++  );
++}
++
++const Ic = ({ children }: any) => (
++  <svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>{children}</svg>
++);
++
++export default function Slide() {
++  return (
++    <div style={{ position: "absolute", top: 92, left: 64, right: 64, bottom: 72, display: "flex", flexDirection: "column" }}>
++      <p className="an up" style={{ font: "700 12.5px var(--fm)", letterSpacing: ".22em", textTransform: "uppercase", color: "var(--ts)", margin: 0, display: "flex", alignItems: "center", gap: 10 }}>
++        <span className="idle-nudge" style={{ color: "var(--js)", fontWeight: 700 }}>{"</>"}</span>
++        Linting
++      </p>
++      <h2 className="an up d1" style={{ font: "700 40px/1.08 var(--fd)", letterSpacing: "-.03em", color: "var(--ink)", margin: "10px 0 0" }}>Settings that do the boring work</h2>
++      <div className="an bar d2" style={{ display: "flex", gap: 6, marginTop: 14 }}>
++        <i className="idle-sheen" style={{ height: 5, borderRadius: 3, width: 52, background: "linear-gradient(90deg,var(--ts),var(--vs),var(--ts))", display: "block" }} />
++        <i style={{ height: 5, borderRadius: 3, width: 18, background: "var(--js)", display: "block" }} />
++      </div>
++      <p className="an up d3" style={{ font: "400 18px/1.5 var(--fb)", color: "var(--mut)", margin: "13px 0 0", maxWidth: 1000 }}>
++        Linter finds problems, formatter ends style debates.
++      </p>
++
++      <div className="stag" style={{ display: "grid", gridTemplateColumns: "1.12fr 1fr", gap: 26, alignItems: "start", marginTop: 20 }}>
++        <Code file=".vscode/settings.json" lang="json" size={14.5}>
++          <Kw>{"{"}</Kw>{"\n  "}<V>{'"editor.formatOnSave"'}</V>{": "}<N>{"true"}</N>{",\n  "}<V>{'"editor.defaultFormatter"'}</V>{": "}<S>{'"esbenp.prettier-vscode"'}</S>{",\n  "}<V>{'"editor.codeActionsOnSave"'}</V>{": "}<Kw>{"{"}</Kw>{"\n    "}<V>{'"source.fixAll.eslint"'}</V>{": "}<S>{'"explicit"'}</S>{"\n  "}<Kw>{"}"}</Kw>{",\n  "}<V>{'"typescript.preferences.importModuleSpecifier"'}</V>{": "}<S>{'"relative"'}</S>{"\n"}<Kw>{"}"}</Kw>
++        </Code>
++        <div className="stag sb" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
++          <Row icon={<Ic><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></Ic>} h="ESLint">Finds bugs and risky patterns.</Row>
++          <Row icon={<Ic><path d="m3 21 10-10M15 4V2m0 12v-2m-5-3H8m12 0h-2m-1.2-4.8-1.4 1.4M18.8 9.8l-1.4-1.4" /></Ic>} h="Prettier">Formats code consistently — no debates.</Row>
++          <Row icon={<Ic><path d="M6 3v12" /><circle cx="18" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 9a9 9 0 0 1-9 9" /></Ic>} h="Commit settings">Share <code className="i">.vscode/</code> so the whole team matches.</Row>
++        </div>
++      </div>
++    </div>
++  );
++}
+diff --git a/slides/infer-fn.tsx b/slides/infer-fn.tsx
+new file mode 100644
+index 0000000..79d62a1
+--- /dev/null
++++ b/slides/infer-fn.tsx
+@@ -0,0 +1,90 @@
++/* 13 · Inference in Functions — return types, callbacks, generics */
++
++const Kw = (p: any) => <span style={{ color: "var(--tk-k)" }}>{p.children}</span>;
++const F = (p: any) => <span style={{ color: "var(--tk-d)" }}>{p.children}</span>;
++const V = (p: any) => <span style={{ color: "var(--tk-f)" }}>{p.children}</span>;
++const S = (p: any) => <span style={{ color: "var(--tk-str)" }}>{p.children}</span>;
++const N = (p: any) => <span style={{ color: "var(--tk-n)" }}>{p.children}</span>;
++const Cm = (p: any) => <span style={{ color: "var(--tk-cm)", fontStyle: "italic" }}>{p.children}</span>;
++const Ty = (p: any) => <span style={{ color: "var(--tk-t)" }}>{p.children}</span>;
++
++function Code({ file, lang, size = 15, style, children }: any) {
++  const lines: any[][] = [[]];
++  const kids: any[] = Array.isArray(children) ? children : [children];
++  for (const c of kids) {
++    if (typeof c === "string") {
++      (c as string).split("\n").forEach((p, i) => {
++        if (i > 0) lines.push([]);
++        if (p) lines[lines.length - 1].push(p);
++      });
++    } else {
++      lines[lines.length - 1].push(c);
++    }
++  }
++  const clen = (xs: any[]): number =>
++    xs.reduce((n, x) => n + (typeof x === "string" ? x.length : clen(Array.isArray(x.props.children) ? x.props.children : [x.props.children])), 0);
++  let t = 0.55;
++  return (
++    <div className="code" style={style}>
++      <div className="code-bar"><i /><i /><i /><b>{file}</b><em className={lang === "js" ? "js" : ""}>{(lang || "ts").toUpperCase()}</em></div>
++      <div className="idle-scan" />
++      <pre style={{ fontSize: size, padding: "13px 16px" }}>
++        {lines.map((ln, i) => {
++          const n = Math.max(4, clen(ln));
++          const d = t;
++          t += n * 0.011 + 0.045;
++          return (
++            <div className="tlw" key={i}>
++              {ln.length === 0 ? "\u00A0" : <span className="tl" style={{ "--n": n, "--d": `${d.toFixed(2)}s` } as any}>{ln}</span>}
++            </div>
++          );
++        })}
++      </pre>
++    </div>
++  );
++}
++
++function Row({ icon, h, children }: any) {
++  return (
++    <div style={{ display: "grid", gridTemplateColumns: "48px 1fr", gap: 15, padding: "13px 16px", background: "var(--card)", border: "1px solid var(--line)", borderRadius: 12, boxShadow: "var(--shadow)", alignItems: "center" }}>
++      <span style={{ width: 46, height: 46, borderRadius: 11, display: "grid", placeItems: "center", background: "var(--ts-soft)", color: "var(--ts)" }}>{icon}</span>
++      <div>
++        <h4 style={{ font: "600 16.5px var(--fd)", color: "var(--ink)", margin: 0 }}>{h}</h4>
++        <p style={{ font: "400 13.5px/1.45 var(--fb)", color: "var(--mut)", margin: "3px 0 0" }}>{children}</p>
++      </div>
++    </div>
++  );
++}
++
++const Ic = ({ children }: any) => (
++  <svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>{children}</svg>
++);
++
++export default function Slide() {
++  return (
++    <div style={{ position: "absolute", top: 92, left: 64, right: 64, bottom: 72, display: "flex", flexDirection: "column" }}>
++      <p className="an up" style={{ font: "700 12.5px var(--fm)", letterSpacing: ".22em", textTransform: "uppercase", color: "var(--ts)", margin: 0, display: "flex", alignItems: "center", gap: 10 }}>
++        <span className="idle-nudge" style={{ color: "var(--js)", fontWeight: 700 }}>{"</>"}</span>
++        Inference
++      </p>
++      <h2 className="an up d1" style={{ font: "700 40px/1.08 var(--fd)", letterSpacing: "-.03em", color: "var(--ink)", margin: "10px 0 0" }}>Return types, callbacks, generics</h2>
++      <div className="an bar d2" style={{ display: "flex", gap: 6, marginTop: 14 }}>
++        <i className="idle-sheen" style={{ height: 5, borderRadius: 3, width: 52, background: "linear-gradient(90deg,var(--ts),var(--vs),var(--ts))", display: "block" }} />
++        <i style={{ height: 5, borderRadius: 3, width: 18, background: "var(--js)", display: "block" }} />
++      </div>
++
++      <div className="stag" style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr", gap: 26, alignItems: "start", marginTop: 22 }}>
++        <Code file="infer-fn.ts" size={15}>
++          <Kw>{"function "}</Kw><F>double</F>{"(n: "}<Ty>number</Ty>{") {\n  "}<Kw>{"return "}</Kw>{"n * "}<N>2</N>{";\n}\n"}<Cm>{"// returns number — inferred"}</Cm>{"\n\n"}
++          {"[1, 2, 3]."}<F>map</F>{"(x => x."}<F>toFixed</F>{"(1));\n"}<Cm>{"// x: number — contextual typing"}</Cm>{"\n\n"}
++          <Kw>{"function "}</Kw><F>first</F><Kw>{"<\""}</Kw><Ty>T</Ty><Kw>{">"}</Kw>{"(xs: "}<Ty>T</Ty>{"[]) { "}<Kw>{"return "}</Kw>{"xs[0]; }\n"}<Kw>{"const "}</Kw><V>a</V>{" = "}<F>first</F>{"(["}<S>{'"x"'}</S>{", "}<S>{'"y"'}</S>{"]);\n"}<Cm>{"// a: string — T inferred"}</Cm>
++        </Code>
++        <div className="stag sb" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
++          <Row icon={<Ic><path d="M5 12h14M13 6l6 6-6 6" /></Ic>} h="Return type">Worked out from the return statements.</Row>
++          <Row icon={<Ic><path d="m17 2 4 4-4 4M3 11v-1a4 4 0 0 1 4-4h14M7 22l-4-4 4-4M21 13v1a4 4 0 0 1-4 4H3" /></Ic>} h="Contextual typing">Callback params get types from where they’re used.</Row>
++          <Row icon={<Ic><rect x="3" y="3" width="8" height="8" rx="1.5" /><rect x="13" y="13" width="8" height="8" rx="1.5" /><path d="M13 7h8M17 3v8M3 17h8M7 13v8" /></Ic>} h="Generics"><code className="i">T</code> is filled in from the arguments you pass.</Row>
++        </div>
++      </div>
++    </div>
++  );
++}
+diff --git a/slides/inference.tsx b/slides/inference.tsx
+new file mode 100644
+index 0000000..cb983d3
+--- /dev/null
++++ b/slides/inference.tsx
+@@ -0,0 +1,97 @@
++/* 12 · Type Inference 101 — you write less, TS still knows */
++
++const Kw = (p: any) => <span style={{ color: "var(--tk-k)" }}>{p.children}</span>;
++const V = (p: any) => <span style={{ color: "var(--tk-f)" }}>{p.children}</span>;
++const S = (p: any) => <span style={{ color: "var(--tk-str)" }}>{p.children}</span>;
++const N = (p: any) => <span style={{ color: "var(--tk-n)" }}>{p.children}</span>;
++const Cm = (p: any) => <span style={{ color: "var(--tk-cm)", fontStyle: "italic" }}>{p.children}</span>;
++
++function Code({ file, lang, size = 15, style, children }: any) {
++  const lines: any[][] = [[]];
++  const kids: any[] = Array.isArray(children) ? children : [children];
++  for (const c of kids) {
++    if (typeof c === "string") {
++      (c as string).split("\n").forEach((p, i) => {
++        if (i > 0) lines.push([]);
++        if (p) lines[lines.length - 1].push(p);
++      });
++    } else {
++      lines[lines.length - 1].push(c);
++    }
++  }
++  const clen = (xs: any[]): number =>
++    xs.reduce((n, x) => n + (typeof x === "string" ? x.length : clen(Array.isArray(x.props.children) ? x.props.children : [x.props.children])), 0);
++  let t = 0.55;
++  return (
++    <div className="code" style={style}>
++      <div className="code-bar"><i /><i /><i /><b>{file}</b><em className={lang === "js" ? "js" : ""}>{(lang || "ts").toUpperCase()}</em></div>
++      <div className="idle-scan" />
++      <pre style={{ fontSize: size, padding: "13px 16px" }}>
++        {lines.map((ln, i) => {
++          const n = Math.max(4, clen(ln));
++          const d = t;
++          t += n * 0.011 + 0.045;
++          return (
++            <div className="tlw" key={i}>
++              {ln.length === 0 ? "\u00A0" : <span className="tl" style={{ "--n": n, "--d": `${d.toFixed(2)}s` } as any}>{ln}</span>}
++            </div>
++          );
++        })}
++      </pre>
++    </div>
++  );
++}
++
++const Ic = ({ children, size = 24 }: any) => (
++  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>{children}</svg>
++);
++
++function Card({ y, icon, h, children }: any) {
++  return (
++    <div style={{ position: "relative", background: "var(--card)", border: "1px solid var(--line)", borderRadius: 14, padding: "15px 17px", boxShadow: "var(--shadow)", overflow: "hidden" }}>
++      <span style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 4, background: y ? "var(--js)" : "var(--ts)" }} />
++      <span className="idle-float" style={{ color: y ? "#B58F00" : "var(--ts)", display: "inline-flex", marginBottom: 8 }}>{icon}</span>
++      <h4 style={{ font: "600 16.5px var(--fd)", color: "var(--ink)", margin: "0 0 4px" }}>{h}</h4>
++      <p style={{ font: "400 13.5px/1.45 var(--fb)", color: "var(--mut)", margin: 0 }}>{children}</p>
++    </div>
++  );
++}
++
++export default function Slide() {
++  return (
++    <div style={{ position: "absolute", top: 92, left: 64, right: 64, bottom: 72, display: "flex", flexDirection: "column" }}>
++      <p className="an up" style={{ font: "700 12.5px var(--fm)", letterSpacing: ".22em", textTransform: "uppercase", color: "var(--ts)", margin: 0, display: "flex", alignItems: "center", gap: 10 }}>
++        <span className="idle-nudge" style={{ color: "var(--js)", fontWeight: 700 }}>{"</>"}</span>
++        Inference
++      </p>
++      <h2 className="an up d1" style={{ font: "700 40px/1.08 var(--fd)", letterSpacing: "-.03em", color: "var(--ink)", margin: "10px 0 0" }}>You write less. TS still knows.</h2>
++      <div className="an bar d2" style={{ display: "flex", gap: 6, marginTop: 14 }}>
++        <i className="idle-sheen" style={{ height: 5, borderRadius: 3, width: 52, background: "linear-gradient(90deg,var(--ts),var(--vs),var(--ts))", display: "block" }} />
++        <i style={{ height: 5, borderRadius: 3, width: 18, background: "var(--js)", display: "block" }} />
++      </div>
++      <p className="an up d3" style={{ font: "400 18px/1.5 var(--fb)", color: "var(--mut)", margin: "13px 0 0", maxWidth: 1000 }}>
++        Hover any variable in VS Code to see what the compiler inferred.
++      </p>
++
++      <div className="stag" style={{ display: "grid", gridTemplateColumns: "1.08fr 1fr", gap: 26, alignItems: "start", marginTop: 18 }}>
++        <Code file="inference.ts" size={14.5}>
++          <Kw>{"let "}</Kw><V>count</V>{" = "}<N>0</N>{";\n"}<Cm>{"// let count: number"}</Cm>{"\n\n"}
++          <Kw>{"const "}</Kw><V>name</V>{" = "}<S>{'"Ada"'}</S>{";\n"}<Cm>{"// const name: \"Ada\"   ← literal type"}</Cm>{"\n\n"}
++          <Kw>{"const "}</Kw><V>tags</V>{" = ["}<S>{'"ts"'}</S>{", "}<S>{'"js"'}</S>{"];\n"}<Cm>{"// const tags: string[]"}</Cm>{"\n\n"}
++          <Kw>{"const "}</Kw><V>user</V>{" = { "}<V>id</V>{": "}<N>1</N>{", "}<V>active</V>{": "}<N>true</N>{" };\n"}<Cm>{"// { id: number; active: boolean }"}</Cm>
++        </Code>
++        <div className="stag sb" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
++          <Card icon={<Ic><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="3" /></Ic>} h="Hover to learn">
++            Use hover or <code className="i">Ctrl + K, Ctrl + I</code> to see the inferred type.
++          </Card>
++          <Card y icon={<Ic><path d="m12 2 9 5-9 5-9-5z" /><path d="m3 12 9 5 9-5M3 17l9 5 9-5" /></Ic>} h="let vs const">
++            <code className="i">const</code> keeps the narrow literal, <code className="i">let</code> widens it to a general type.
++          </Card>
++          <Card icon={<Ic><path d="m4 12.5 5 5L20 6.5" /></Ic>} h="Annotate boundaries">
++            Let TS infer locals; write types on exports and function parameters.
++          </Card>
++        </div>
++      </div>
++    </div>
++  );
++}
+diff --git a/slides/linting.tsx b/slides/linting.tsx
+new file mode 100644
+index 0000000..15b0958
+--- /dev/null
++++ b/slides/linting.tsx
+@@ -0,0 +1,95 @@
++/* 09 · Linting with ESLint — catch mistakes while you type */
++
++const Kw = (p: any) => <span style={{ color: "var(--tk-p)" }}>{p.children}</span>;
++const V = (p: any) => <span style={{ color: "var(--tk-f)" }}>{p.children}</span>;
++const S = (p: any) => <span style={{ color: "var(--tk-str)" }}>{p.children}</span>;
++const Ty = (p: any) => <span style={{ color: "var(--tk-t)" }}>{p.children}</span>;
++const F = (p: any) => <span style={{ color: "var(--tk-d)" }}>{p.children}</span>;
++
++function Code({ file, lang, size = 15, style, children, extra }: any) {
++  const lines: any[][] = [[]];
++  const kids: any[] = Array.isArray(children) ? children : [children];
++  for (const c of kids) {
++    if (typeof c === "string") {
++      (c as string).split("\n").forEach((p, i) => {
++        if (i > 0) lines.push([]);
++        if (p) lines[lines.length - 1].push(p);
++      });
++    } else {
++      lines[lines.length - 1].push(c);
++    }
++  }
++  const clen = (xs: any[]): number =>
++    xs.reduce((n, x) => n + (typeof x === "string" ? x.length : clen(Array.isArray(x.props.children) ? x.props.children : [x.props.children])), 0);
++  let t = 0.55;
++  return (
++    <div className="code" style={style}>
++      <div className="code-bar"><i /><i /><i /><b>{file}</b><em className={lang === "js" ? "js" : ""}>{(lang || "ts").toUpperCase()}</em></div>
++      <div className="idle-scan" />
++      <pre style={{ fontSize: size, padding: "12px 16px" }}>
++        {lines.map((ln, i) => {
++          const n = Math.max(4, clen(ln));
++          const d = t;
++          t += n * 0.011 + 0.045;
++          return (
++            <div className="tlw" key={i}>
++              {ln.length === 0 ? "\u00A0" : <span className="tl" style={{ "--n": n, "--d": `${d.toFixed(2)}s` } as any}>{ln}</span>}
++            </div>
++          );
++        })}
++        {extra}
++      </pre>
++    </div>
++  );
++}
++
++const Ic = ({ children, size = 22 }: any) => (
++  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>{children}</svg>
++);
++
++export default function Slide() {
++  return (
++    <div style={{ position: "absolute", top: 92, left: 64, right: 64, bottom: 72, display: "flex", flexDirection: "column" }}>
++      <p className="an up" style={{ font: "700 12.5px var(--fm)", letterSpacing: ".22em", textTransform: "uppercase", color: "var(--ts)", margin: 0, display: "flex", alignItems: "center", gap: 10 }}>
++        <span className="idle-nudge" style={{ color: "var(--js)", fontWeight: 700 }}>{"</>"}</span>
++        Linting
++      </p>
++      <h2 className="an up d1" style={{ font: "700 40px/1.08 var(--fd)", letterSpacing: "-.03em", color: "var(--ink)", margin: "10px 0 0" }}>
++        Catch mistakes <span style={{ background: "linear-gradient(transparent 62%, var(--js-soft) 62%)", padding: "0 .12em" }}>while you type</span>
++      </h2>
++      <div className="an bar d2" style={{ display: "flex", gap: 6, marginTop: 14 }}>
++        <i className="idle-sheen" style={{ height: 5, borderRadius: 3, width: 52, background: "linear-gradient(90deg,var(--ts),var(--vs),var(--ts))", display: "block" }} />
++        <i style={{ height: 5, borderRadius: 3, width: 18, background: "var(--js)", display: "block" }} />
++      </div>
++      <p className="an up d3" style={{ font: "400 18px/1.5 var(--fb)", color: "var(--mut)", margin: "13px 0 0", maxWidth: 1000 }}>
++        ESLint finds suspicious patterns; typescript-eslint adds type-aware rules.
++      </p>
++
++      <div className="stag" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24, alignItems: "start", marginTop: 18 }}>
++        <Code file="eslint.config.js" lang="js" size={13.5}>
++          <Kw>{"import "}</Kw><V>js</V><Kw>{" from "}</Kw><S>{'"@eslint/js"'}</S><Kw>{";\nimport "}</Kw><V>tseslint</V><Kw>{" from "}</Kw><S>{'"typescript-eslint"'}</S><Kw>{";\n\nexport default "}</Kw><V>tseslint</V><Kw>{"."}</Kw><F>config</F><Kw>{"(\n  "}</Kw><V>js</V><Kw>{"."}</Kw><V>configs</V><Kw>{"."}</Kw><V>recommended</V><Kw>{",\n  ..."}</Kw><V>tseslint</V><Kw>{"."}</Kw><V>configs</V><Kw>{"."}</Kw><V>recommended</V><Kw>{",\n  {\n    "}</Kw><V>rules</V><Kw>{": {\n      "}</Kw><S>{'"no-console"'}</S><Kw>{": "}</Kw><S>{'"warn"'}</S><Kw>{",\n      "}</Kw><S>{'"@typescript-eslint/no-explicit-any"'}</S><Kw>{": "}</Kw><S>{'"error"'}</S><Kw>{",\n    },\n  }\n);"}</Kw>
++        </Code>
++
++        <div className="stag sb" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
++          <Code file="src/cart.ts" lang="ts" size={14}>
++            <Kw>{"const "}</Kw><V>data</V>{": "}<span className="squig w" style={{ backgroundColor: "rgba(204,167,0,.18)" }}><Ty>any</Ty></span>{" = "}<F>load</F>{"();\n"}
++            <span style={{ color: "#CCA700" }}><V>console</V>.<F>log</F></span>{"(data);"}
++          </Code>
++          <div className="code" style={{ boxShadow: "none" }}>
++            <div style={{ padding: "8px 14px 10px" }}>
++              <span className="hint">⚠ Unexpected any. Specify a different type.</span>
++              <span className="hint">⚠ Unexpected console statement.</span>
++            </div>
++          </div>
++          <div style={{ position: "relative", background: "var(--card)", border: "1px solid var(--line)", borderRadius: 14, padding: "14px 16px", boxShadow: "var(--shadow)", overflow: "hidden" }}>
++            <span style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 4, background: "var(--js)" }} />
++            <h4 style={{ font: "600 16px var(--fd)", margin: "0 0 3px", color: "var(--ink)" }}>Quick Fix</h4>
++            <p style={{ font: "400 13px/1.45 var(--fb)", color: "var(--mut)", margin: 0 }}>
++              <code className="i">Ctrl + .</code> applies the fix. Set <code className="i">editor.codeActionsOnSave</code> to fix on save.
++            </p>
++          </div>
++        </div>
++      </div>
++    </div>
++  );
++}
+diff --git a/slides/narrowing.tsx b/slides/narrowing.tsx
+new file mode 100644
+index 0000000..544ed75
+--- /dev/null
++++ b/slides/narrowing.tsx
+@@ -0,0 +1,75 @@
++/* 14 · Narrowing — types follow your logic */
++
++const Kw = (p: any) => <span style={{ color: "var(--tk-k)" }}>{p.children}</span>;
++const F = (p: any) => <span style={{ color: "var(--tk-d)" }}>{p.children}</span>;
++const V = (p: any) => <span style={{ color: "var(--tk-f)" }}>{p.children}</span>;
++const S = (p: any) => <span style={{ color: "var(--tk-str)" }}>{p.children}</span>;
++const N = (p: any) => <span style={{ color: "var(--tk-n)" }}>{p.children}</span>;
++const Cm = (p: any) => <span style={{ color: "var(--tk-cm)", fontStyle: "italic" }}>{p.children}</span>;
++const Ty = (p: any) => <span style={{ color: "var(--tk-t)" }}>{p.children}</span>;
++
++function Code({ file, lang, size = 15, style, children }: any) {
++  const lines: any[][] = [[]];
++  const kids: any[] = Array.isArray(children) ? children : [children];
++  for (const c of kids) {
++    if (typeof c === "string") {
++      (c as string).split("\n").forEach((p, i) => {
++        if (i > 0) lines.push([]);
++        if (p) lines[lines.length - 1].push(p);
++      });
++    } else {
++      lines[lines.length - 1].push(c);
++    }
++  }
++  const clen = (xs: any[]): number =>
++    xs.reduce((n, x) => n + (typeof x === "string" ? x.length : clen(Array.isArray(x.props.children) ? x.props.children : [x.props.children])), 0);
++  let t = 0.55;
++  return (
++    <div className="code" style={style}>
++      <div className="code-bar"><i /><i /><i /><b>{file}</b><em className={lang === "js" ? "js" : ""}>{(lang || "ts").toUpperCase()}</em></div>
++      <div className="idle-scan" />
++      <pre style={{ fontSize: size, padding: "13px 16px" }}>
++        {lines.map((ln, i) => {
++          const n = Math.max(4, clen(ln));
++          const d = t;
++          t += n * 0.011 + 0.045;
++          return (
++            <div className="tlw" key={i}>
++              {ln.length === 0 ? "\u00A0" : <span className="tl" style={{ "--n": n, "--d": `${d.toFixed(2)}s` } as any}>{ln}</span>}
++            </div>
++          );
++        })}
++      </pre>
++    </div>
++  );
++}
++
++export default function Slide() {
++  return (
++    <div style={{ position: "absolute", top: 92, left: 64, right: 64, bottom: 72, display: "flex", flexDirection: "column" }}>
++      <p className="an up" style={{ font: "700 12.5px var(--fm)", letterSpacing: ".22em", textTransform: "uppercase", color: "var(--ts)", margin: 0, display: "flex", alignItems: "center", gap: 10 }}>
++        <span className="idle-nudge" style={{ color: "var(--js)", fontWeight: 700 }}>{"</>"}</span>
++        Inference
++      </p>
++      <h2 className="an up d1" style={{ font: "700 40px/1.08 var(--fd)", letterSpacing: "-.03em", color: "var(--ink)", margin: "10px 0 0" }}>Narrowing: types follow your logic</h2>
++      <div className="an bar d2" style={{ display: "flex", gap: 6, marginTop: 14 }}>
++        <i className="idle-sheen" style={{ height: 5, borderRadius: 3, width: 52, background: "linear-gradient(90deg,var(--ts),var(--vs),var(--ts))", display: "block" }} />
++        <i style={{ height: 5, borderRadius: 3, width: 18, background: "var(--js)", display: "block" }} />
++      </div>
++      <p className="an up d3" style={{ font: "400 18px/1.5 var(--fb)", color: "var(--mut)", margin: "13px 0 0", maxWidth: 1000 }}>
++        Checks like <code className="i">typeof</code> and <code className="i">in</code> teach TS what is safe.
++      </p>
++
++      <div className="stag" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24, alignItems: "start", marginTop: 20 }}>
++        <Code file="narrow.ts" size={14.5}>
++          <Kw>{"type "}</Kw><Ty>Id</Ty>{" = "}<Ty>string</Ty>{" | "}<Ty>number</Ty>{";\n\n"}
++          <Kw>{"function "}</Kw><F>show</F>{"(id: "}<Ty>Id</Ty>{") {\n  "}<Kw>{"if "}</Kw>{"("}<Kw>{"typeof "}</Kw>{"id === "}<S>{'"string"'}</S>{") {\n    "}<Kw>{"return "}</Kw>{"id."}<F>toUpperCase</F>{"(); "}<Cm>{"// id: string"}</Cm>{"\n  }\n  "}<Kw>{"return "}</Kw>{"id."}<F>toFixed</F>{"("}<N>0</N>{");      "}<Cm>{"// id: number"}</Cm>{"\n}"}
++        </Code>
++        <Code file="shapes.ts" size={14.5}>
++          <Kw>{"type "}</Kw><Ty>Shape</Ty>{" =\n  | { "}<V>kind</V>{": "}<S>{'"circle"'}</S>{"; "}<V>r</V>{": "}<Ty>number</Ty>{" }\n  | { "}<V>kind</V>{": "}<S>{'"square"'}</S>{"; "}<V>s</V>{": "}<Ty>number</Ty>{" };\n\n"}
++          <Kw>{"function "}</Kw><F>area</F>{"(x: "}<Ty>Shape</Ty>{") {\n  "}<Kw>{"switch "}</Kw>{"(x.kind) {\n    "}<Kw>{"case "}</Kw><S>{'"circle"'}</S>{": "}<Kw>{"return "}</Kw><Ty>Math</Ty><V>.PI</V>{" * x.r ** "}<N>2</N>{";\n    "}<Kw>{"case "}</Kw><S>{'"square"'}</S>{": "}<Kw>{"return "}</Kw>{"x.s ** "}<N>2</N>{";\n  }\n}"}
++        </Code>
++      </div>
++    </div>
++  );
++}
+diff --git a/slides/pitfalls.tsx b/slides/pitfalls.tsx
+new file mode 100644
+index 0000000..6b73b41
+--- /dev/null
++++ b/slides/pitfalls.tsx
+@@ -0,0 +1,52 @@
++/* 18 · Common Pitfalls — when it doesn't work */
++
++export default function Slide() {
++  return (
++    <div style={{ position: "absolute", top: 92, left: 64, right: 64, bottom: 72, display: "flex", flexDirection: "column" }}>
++      <p className="an up" style={{ font: "700 12.5px var(--fm)", letterSpacing: ".22em", textTransform: "uppercase", color: "var(--ts)", margin: 0, display: "flex", alignItems: "center", gap: 10 }}>
++        <span className="idle-nudge" style={{ color: "var(--js)", fontWeight: 700 }}>{"</>"}</span>
++        Troubleshooting
++      </p>
++      <h2 className="an up d1" style={{ font: "700 40px/1.08 var(--fd)", letterSpacing: "-.03em", color: "var(--ink)", margin: "10px 0 0" }}>When it doesn’t work</h2>
++      <div className="an bar d2" style={{ display: "flex", gap: 6, marginTop: 14 }}>
++        <i className="idle-sheen" style={{ height: 5, borderRadius: 3, width: 52, background: "linear-gradient(90deg,var(--ts),var(--vs),var(--ts))", display: "block" }} />
++        <i style={{ height: 5, borderRadius: 3, width: 18, background: "var(--js)", display: "block" }} />
++      </div>
++
++      <div className="an up d3" style={{ marginTop: 26 }}>
++        <table className="tbl">
++          <thead>
++            <tr><th style={{ width: "30%" }}>Symptom</th><th style={{ width: "30%" }}>Likely cause</th><th>Fix</th></tr>
++          </thead>
++          <tbody>
++            <tr>
++              <td>Breakpoint is grey / unbound</td>
++              <td style={{ color: "var(--mut)" }}>No source maps</td>
++              <td>Set <code className="i">sourceMap</code> + <code className="i">outFiles</code></td>
++            </tr>
++            <tr>
++              <td>ESLint does nothing</td>
++              <td style={{ color: "var(--mut)" }}>Wrong config or server</td>
++              <td>Run <b>ESLint: Restart Server</b></td>
++            </tr>
++            <tr>
++              <td>Types look stale</td>
++              <td style={{ color: "var(--mut)" }}>Old TS version</td>
++              <td><b>TypeScript: Select Version → Workspace</b></td>
++            </tr>
++            <tr>
++              <td>Everything is <code className="i">any</code></td>
++              <td style={{ color: "var(--mut)" }}>Strict off or implicit any</td>
++              <td>Enable <code className="i">strict</code></td>
++            </tr>
++          </tbody>
++        </table>
++      </div>
++
++      <div className="an up d7" style={{ marginTop: 22, display: "flex", alignItems: "center", gap: 9, font: "500 13.5px var(--fm)", color: "var(--mut)" }}>
++        <span className="idle-pulse" style={{ width: 9, height: 9, borderRadius: "50%", background: "var(--js)", display: "inline-block" }} />
++        screenshot these four — they fix 90% of live-demo accidents
++      </div>
++    </div>
++  );
++}
+diff --git a/slides/presenter.tsx b/slides/presenter.tsx
+new file mode 100644
+index 0000000..aa144f3
+--- /dev/null
++++ b/slides/presenter.tsx
+@@ -0,0 +1,51 @@
++/* 02 · Presenter */
++function Frame({ kick, title, children }: any) {
++  return (
++    <div style={{ position: "absolute", top: 92, left: 64, right: 64, bottom: 72, display: "flex", flexDirection: "column" }}>
++      <p className="an up" style={{ font: "700 12.5px var(--fm)", letterSpacing: ".22em", textTransform: "uppercase", color: "var(--ts)", margin: 0, display: "flex", alignItems: "center", gap: 10 }}>
++        <span className="idle-nudge" style={{ color: "var(--js)", fontWeight: 700 }}>{"</>"}</span>
++        {kick}
++      </p>
++      <h2 className="an up d1" style={{ font: "700 40px/1.08 var(--fd)", letterSpacing: "-.03em", color: "var(--ink)", margin: "10px 0 0" }}>{title}</h2>
++      <div className="an bar d2" style={{ display: "flex", gap: 6, marginTop: 14 }}>
++        <i className="idle-sheen" style={{ height: 5, borderRadius: 3, width: 52, background: "linear-gradient(90deg,var(--ts),var(--vs),var(--ts))", display: "block" }} />
++        <i style={{ height: 5, borderRadius: 3, width: 18, background: "var(--js)", display: "block" }} />
++      </div>
++      <div style={{ flex: 1, minHeight: 0, marginTop: 24, display: "flex", flexDirection: "column" }}>{children}</div>
++    </div>
++  );
++}
++
++export default function Slide() {
++  return (
++    <Frame kick="Your Host" title="Hello, I’m…">
++      <div className="stag" style={{ display: "flex", alignItems: "center", gap: 34, marginTop: 26 }}>
++        <div
++          className="idle-ring"
++          style={{
++            width: 104, height: 104, borderRadius: "50%", flex: "none",
++            background: "linear-gradient(135deg, var(--ts), var(--vs))",
++            color: "#fff", display: "grid", placeItems: "center",
++            font: "700 34px var(--fd)", letterSpacing: "-.02em",
++          }}
++        >
++          YN
++        </div>
++        <div>
++          <h3 style={{ font: "700 30px var(--fd)", letterSpacing: "-.02em", color: "var(--ink)", margin: 0 }}>Your Name</h3>
++          <p style={{ font: "400 17px/1.5 var(--fb)", color: "var(--mut)", margin: "6px 0 0" }}>
++            <b style={{ color: "var(--ts-deep)" }}>Microsoft Learn Student Ambassador</b> · Faculty of Technology
++          </p>
++          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 16 }}>
++            <span className="chip">Web Development</span>
++            <span className="chip js">Debugging</span>
++            <span className="chip">Type Safety</span>
++          </div>
++        </div>
++      </div>
++      <p className="an up d8" style={{ font: "400 15px/1.6 var(--fb)", color: "var(--mut)", margin: "26px 0 0", maxWidth: 760 }}>
++        Swap this slide for your photo and bio — keep the three chips: they are exactly what the audience is about to learn.
++      </p>
++    </Frame>
++  );
++}
+diff --git a/slides/recap.tsx b/slides/recap.tsx
+new file mode 100644
+index 0000000..7c131f0
+--- /dev/null
++++ b/slides/recap.tsx
+@@ -0,0 +1,45 @@
++/* 19 · Recap — key takeaways */
++
++const Ic = ({ children, size = 24 }: any) => (
++  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>{children}</svg>
++);
++
++const CARDS: { y?: boolean; icon: any; h: string; p: string }[] = [
++  { icon: <Ic><circle cx="12" cy="13" r="5" /><path d="M12 8V6M8.5 9.5 6 7M15.5 9.5 18 7M7 13H4M20 13h-3M8.5 16.5 6 19M15.5 16.5 18 19" /></Ic>, h: "Debug natively", p: "F5, breakpoints, logpoints, source maps." },
++  { y: true, icon: <Ic><path d="M12 2 4 6v6c0 5 3.4 8.4 8 10 4.6-1.6 8-5 8-10V6z" /></Ic>, h: "Lint continuously", p: "ESLint + Prettier on save." },
++  { icon: <Ic><path d="M12 3l2.1 5.6L20 11l-5.9 2.4L12 19l-2.1-5.6L4 11l5.9-2.4z" /></Ic>, h: "Trust inference", p: "Annotate boundaries, infer the rest." },
++  { y: true, icon: <Ic><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1" /></Ic>, h: "Enable strict", p: "Reliable types start with one flag." },
++];
++
++export default function Slide() {
++  return (
++    <div style={{ position: "absolute", top: 92, left: 64, right: 64, bottom: 72, display: "flex", flexDirection: "column" }}>
++      <p className="an up" style={{ font: "700 12.5px var(--fm)", letterSpacing: ".22em", textTransform: "uppercase", color: "var(--ts)", margin: 0, display: "flex", alignItems: "center", gap: 10 }}>
++        <span className="idle-nudge" style={{ color: "var(--js)", fontWeight: 700 }}>{"</>"}</span>
++        Recap
++      </p>
++      <h2 className="an up d1" style={{ font: "700 40px/1.08 var(--fd)", letterSpacing: "-.03em", color: "var(--ink)", margin: "10px 0 0" }}>Key takeaways</h2>
++      <div className="an bar d2" style={{ display: "flex", gap: 6, marginTop: 14 }}>
++        <i className="idle-sheen" style={{ height: 5, borderRadius: 3, width: 52, background: "linear-gradient(90deg,var(--ts),var(--vs),var(--ts))", display: "block" }} />
++        <i style={{ height: 5, borderRadius: 3, width: 18, background: "var(--js)", display: "block" }} />
++      </div>
++
++      <div className="stag" style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 16, marginTop: 26 }}>
++        {CARDS.map((c, i) => (
++          <div key={i} style={{ position: "relative", background: "var(--card)", border: "1px solid var(--line)", borderRadius: 14, padding: "16px 16px", boxShadow: "var(--shadow)", overflow: "hidden" }}>
++            <span style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 4, background: c.y ? "var(--js)" : "var(--ts)" }} />
++            <span className="idle-float" style={{ color: c.y ? "#B58F00" : "var(--ts)", display: "block", animationDelay: `${i * -0.9}s` }}>
++              <Ic size={25}>{c.icon.props.children}</Ic>
++            </span>
++            <h4 style={{ font: "600 17px var(--fd)", color: "var(--ink)", margin: "10px 0 5px" }}>{c.h}</h4>
++            <p style={{ font: "400 13.5px/1.45 var(--fb)", color: "var(--mut)", margin: 0 }}>{c.p}</p>
++          </div>
++        ))}
++      </div>
++
++      <p className="an up d8" style={{ font: "600 23px/1.4 var(--fd)", color: "var(--ts-deep)", textAlign: "center", margin: "30px auto 0", maxWidth: 760 }}>
++        “Let the tools find the bug before your users do.”
++      </p>
++    </div>
++  );
++}
+diff --git a/slides/resources.tsx b/slides/resources.tsx
+new file mode 100644
+index 0000000..d7868ef
+--- /dev/null
++++ b/slides/resources.tsx
+@@ -0,0 +1,40 @@
++/* 20 · Resources — keep learning */
++
++const Ic = ({ children }: any) => (
++  <svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>{children}</svg>
++);
++
++const ROWS = [
++  { icon: <Ic><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V2H6.5A2.5 2.5 0 0 0 4 4.5z" /><path d="M20 17v5H6.5a2.5 2.5 0 0 1 0-5" /></Ic>, h: "TypeScript Handbook", p: <>typescriptlang.org/docs — start with “Everyday Types”.</> },
++  { icon: <Ic><circle cx="12" cy="13" r="5" /><path d="M12 8V6M8.5 9.5 6 7M15.5 9.5 18 7M7 13H4M20 13h-3M8.5 16.5 6 19M15.5 16.5 18 19" /></Ic>, h: "VS Code: Debugging", p: <>code.visualstudio.com/docs/editor/debugging</> },
++  { icon: <Ic><path d="M12 2 4 6v6c0 5 3.4 8.4 8 10 4.6-1.6 8-5 8-10V6z" /></Ic>, h: "typescript-eslint", p: <>typescript-eslint.io — rules and flat-config guide.</> },
++  { icon: <Ic><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="4" /><circle cx="12" cy="12" r="0.5" /></Ic>, h: "Microsoft Learn", p: <>Search Microsoft Learn for “TypeScript” learning paths.</> },
++];
++
++export default function Slide() {
++  return (
++    <div style={{ position: "absolute", top: 92, left: 64, right: 64, bottom: 72, display: "flex", flexDirection: "column" }}>
++      <p className="an up" style={{ font: "700 12.5px var(--fm)", letterSpacing: ".22em", textTransform: "uppercase", color: "var(--ts)", margin: 0, display: "flex", alignItems: "center", gap: 10 }}>
++        <span className="idle-nudge" style={{ color: "var(--js)", fontWeight: 700 }}>{"</>"}</span>
++        Keep Learning
++      </p>
++      <h2 className="an up d1" style={{ font: "700 40px/1.08 var(--fd)", letterSpacing: "-.03em", color: "var(--ink)", margin: "10px 0 0" }}>Resources &amp; next steps</h2>
++      <div className="an bar d2" style={{ display: "flex", gap: 6, marginTop: 14 }}>
++        <i className="idle-sheen" style={{ height: 5, borderRadius: 3, width: 52, background: "linear-gradient(90deg,var(--ts),var(--vs),var(--ts))", display: "block" }} />
++        <i style={{ height: 5, borderRadius: 3, width: 18, background: "var(--js)", display: "block" }} />
++      </div>
++
++      <div className="stag" style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 24, maxWidth: 900 }}>
++        {ROWS.map((r, i) => (
++          <div key={i} style={{ display: "grid", gridTemplateColumns: "48px 1fr", gap: 15, padding: "13px 16px", background: "var(--card)", border: "1px solid var(--line)", borderRadius: 12, boxShadow: "var(--shadow)", alignItems: "center" }}>
++            <span style={{ width: 46, height: 46, borderRadius: 11, display: "grid", placeItems: "center", background: "var(--ts-soft)", color: "var(--ts)" }}>{r.icon}</span>
++            <div>
++              <h4 style={{ font: "600 16.5px var(--fd)", color: "var(--ink)", margin: 0 }}>{r.h}</h4>
++              <p style={{ font: "400 13.5px/1.45 var(--fb)", color: "var(--mut)", margin: "3px 0 0" }}>{r.p}</p>
++            </div>
++          </div>
++        ))}
++      </div>
++    </div>
++  );
++}
+diff --git a/slides/title.tsx b/slides/title.tsx
+index 3019686..b9eaa2f 100644
+--- a/slides/title.tsx
++++ b/slides/title.tsx
+@@ -1,40 +1,51 @@
+-export default function Slide() {
++/* 01 · Title — "VS Code & TS: Modern Web Tooling" */
++function Badge({ label, js }: { label: string; js?: boolean }) {
+   return (
+-    <div
++    <span
++      className="idle-bob"
+       style={{
+-        position: "absolute",
+-        inset: 0,
+-        display: "flex",
+-        flexDirection: "column",
+-        alignItems: "center",
+-        justifyContent: "center",
+-        textAlign: "center",
+-        gap: 22,
++        display: "inline-grid", placeItems: "end", width: 66, height: 66,
++        background: js ? "var(--js)" : "var(--ts)", color: js ? "#1b1b1b" : "#fff",
++        borderRadius: 12, padding: "6px 9px", font: "800 26px var(--fd)",
++        letterSpacing: "-.04em",
++        boxShadow: js ? "0 8px 24px rgba(240,192,0,.35)" : "0 8px 24px rgba(49,120,198,.35)",
+       }}
+     >
+-      <p
+-        style={{
+-          font: "500 12px var(--fm)",
+-          letterSpacing: ".24em",
+-          textTransform: "uppercase",
+-          color: "var(--mut)",
+-        }}
+-      >
+-        Your kick line
+-      </p>
+-      <h1
+-        style={{
+-          font: "600 92px/1 var(--fd)",
+-          letterSpacing: "-.045em",
+-          color: "var(--ink)",
+-          margin: 0,
+-        }}
+-      >
+-        Deck title
++      {label}
++    </span>
++  );
++}
++
++export default function Slide() {
++  return (
++    <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center" }}>
++      {/* floating code glyphs */}
++      <span className="glyph idle-drift" style={{ top: 88, left: 96, fontSize: 44 }}>{"{ }"}</span>
++      <span className="glyph t idle-drift" style={{ top: 150, right: 120, fontSize: 38, animationDelay: "-2.5s" }}>{"=>"}</span>
++      <span className="glyph w idle-drift" style={{ bottom: 130, left: 150, fontSize: 34, animationDelay: "-4.5s" }}>{"<T>"}</span>
++      <span className="glyph idle-drift" style={{ bottom: 170, right: 96, fontSize: 42, animationDelay: "-1.2s" }}>{"?."}</span>
++
++      <div className="an pop" style={{ display: "flex", gap: 14 }}>
++        <Badge label="JS" js />
++        <Badge label="TS" />
++      </div>
++      <div className="an up d2" style={{ display: "flex", gap: 10, marginTop: 22 }}>
++        <span className="chip js">JavaScript / TS</span>
++        <span className="chip chip-ghost">TypeScript 101</span>
++      </div>
++      <h1 className="an up d3" style={{ font: "800 74px/1.02 var(--fd)", letterSpacing: "-.045em", color: "var(--ink)", margin: "24px 0 0" }}>
++        VS Code &amp; TS
++        <br />
++        <span className="grad idle-text-sheen">Modern Web Tooling</span>
+       </h1>
+-      <p style={{ font: "400 24px/1.5 var(--fb)", color: "var(--mut)" }}>
+-        A subtitle that says what this deck is about.
++      <p className="an up d5" style={{ font: "400 20px/1.5 var(--fb)", color: "var(--mut)", margin: "18px 0 0", maxWidth: 640 }}>
++        Native debugging, linting &amp; TypeScript type inference — the three habits that make JavaScript projects calmer to build.
+       </p>
++      <div className="an fade d7" style={{ display: "flex", flexWrap: "wrap", gap: 18, marginTop: 30, font: "400 12px var(--fm)", color: "var(--faint)", letterSpacing: ".06em" }}>
++        <span><kbd>←</kbd><kbd>→</kbd> navigate</span>
++        <span><kbd>T</kbd> theme</span>
++        <span><kbd>O</kbd> overview</span>
++      </div>
+     </div>
+   );
+ }
+diff --git a/slides/tooling.tsx b/slides/tooling.tsx
+new file mode 100644
+index 0000000..39a4aab
+--- /dev/null
++++ b/slides/tooling.tsx
+@@ -0,0 +1,54 @@
++/* 05 · VS Code at a Glance — one editor, whole toolchain */
++
++function Ic({ children, size = 24, style }: any) {
++  return (
++    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" style={style} aria-hidden>
++      {children}
++    </svg>
++  );
++}
++
++const CARDS: { y?: boolean; icon: any; h: string; p: any }[] = [
++  { icon: <Ic><path d="M12 3l2.1 5.6L20 11l-5.9 2.4L12 19l-2.1-5.6L4 11l5.9-2.4z" /></Ic>, h: "IntelliSense", p: <>Completions, signatures and hover docs powered by the TypeScript language service — for JS too.</> },
++  { y: true, icon: <Ic><circle cx="12" cy="13" r="5" /><path d="M12 8V6M8.5 9.5 6 7M15.5 9.5 18 7M7 13H4M20 13h-3M8.5 16.5 6 19M15.5 16.5 18 19" /></Ic>, h: "Built-in debugger", p: <>Node.js and browser debugging out of the box with a JavaScript Debug Terminal.</> },
++  { icon: <Ic><rect x="3" y="3" width="8" height="8" rx="1.5" /><rect x="13" y="13" width="8" height="8" rx="1.5" /><path d="M13 7h8M17 3v8M3 17h8M7 13v8" /></Ic>, h: "Extensions", p: <>ESLint, Prettier and more live in the Marketplace — one click to install.</> },
++  { y: true, icon: <Ic><path d="m4 17 6-5-6-5M12 19h8" /></Ic>, h: "Integrated terminal", p: <>Run scripts, <code className="i">tsc --watch</code> and servers without leaving the window.</> },
++];
++
++export default function Slide() {
++  return (
++    <div style={{ position: "absolute", top: 92, left: 64, right: 64, bottom: 72, display: "flex", flexDirection: "column" }}>
++      <p className="an up" style={{ font: "700 12.5px var(--fm)", letterSpacing: ".22em", textTransform: "uppercase", color: "var(--ts)", margin: 0, display: "flex", alignItems: "center", gap: 10 }}>
++        <span className="idle-nudge" style={{ color: "var(--js)", fontWeight: 700 }}>{"</>"}</span>
++        VS Code
++      </p>
++      <h2 className="an up d1" style={{ font: "700 40px/1.08 var(--fd)", letterSpacing: "-.03em", color: "var(--ink)", margin: "10px 0 0" }}>One editor, whole toolchain</h2>
++      <div className="an bar d2" style={{ display: "flex", gap: 6, marginTop: 14 }}>
++        <i className="idle-sheen" style={{ height: 5, borderRadius: 3, width: 52, background: "linear-gradient(90deg,var(--ts),var(--vs),var(--ts))", display: "block" }} />
++        <i style={{ height: 5, borderRadius: 3, width: 18, background: "var(--js)", display: "block" }} />
++      </div>
++      <p className="an up d3" style={{ font: "400 18px/1.5 var(--fb)", color: "var(--mut)", margin: "13px 0 0", maxWidth: 1000 }}>
++        Everything in this talk ships built in — no setup marathon.
++      </p>
++
++      <div className="stag" style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 16, marginTop: 22 }}>
++        {CARDS.map((c, i) => (
++          <div key={i} style={{ position: "relative", background: "var(--card)", border: "1px solid var(--line)", borderRadius: 14, padding: "16px 16px 14px", boxShadow: "var(--shadow)", overflow: "hidden" }}>
++            <span style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 4, background: c.y ? "var(--js)" : "var(--ts)" }} />
++            <span className="idle-float" style={{ color: c.y ? "#B58F00" : "var(--ts)", display: "block", animationDelay: `${i * -0.9}s` }}>
++              <Ic size={25}>{c.icon.props.children}</Ic>
++            </span>
++            <h4 style={{ font: "600 17px var(--fd)", margin: "10px 0 5px", color: "var(--ink)" }}>{c.h}</h4>
++            <p style={{ font: "400 13.5px/1.45 var(--fb)", color: "var(--mut)", margin: 0 }}>{c.p}</p>
++          </div>
++        ))}
++      </div>
++
++      <div className="an up d8" style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 22 }}>
++        <span className="chip">Ctrl + Shift + P · Command Palette</span>
++        <span className="chip js">F12 · Go to Definition</span>
++        <span className="chip">F2 · Rename Symbol</span>
++      </div>
++    </div>
++  );
++}
+diff --git a/slides/tsconfig.tsx b/slides/tsconfig.tsx
+new file mode 100644
+index 0000000..472c7f2
+--- /dev/null
++++ b/slides/tsconfig.tsx
+@@ -0,0 +1,93 @@
++/* 15 · tsconfig & Strict Mode — turn on strict from day one */
++
++const Kw = (p: any) => <span style={{ color: "var(--tk-p)" }}>{p.children}</span>;
++const V = (p: any) => <span style={{ color: "var(--tk-f)" }}>{p.children}</span>;
++const S = (p: any) => <span style={{ color: "var(--tk-str)" }}>{p.children}</span>;
++const N = (p: any) => <span style={{ color: "var(--tk-n)" }}>{p.children}</span>;
++
++function Code({ file, lang, size = 15, style, children }: any) {
++  const lines: any[][] = [[]];
++  const kids: any[] = Array.isArray(children) ? children : [children];
++  for (const c of kids) {
++    if (typeof c === "string") {
++      (c as string).split("\n").forEach((p, i) => {
++        if (i > 0) lines.push([]);
++        if (p) lines[lines.length - 1].push(p);
++      });
++    } else {
++      lines[lines.length - 1].push(c);
++    }
++  }
++  const clen = (xs: any[]): number =>
++    xs.reduce((n, x) => n + (typeof x === "string" ? x.length : clen(Array.isArray(x.props.children) ? x.props.children : [x.props.children])), 0);
++  let t = 0.55;
++  return (
++    <div className="code" style={style}>
++      <div className="code-bar"><i /><i /><i /><b>{file}</b><em className={lang === "js" ? "js" : ""}>{(lang || "ts").toUpperCase()}</em></div>
++      <div className="idle-scan" />
++      <pre style={{ fontSize: size, padding: "12px 16px" }}>
++        {lines.map((ln, i) => {
++          const n = Math.max(4, clen(ln));
++          const d = t;
++          t += n * 0.011 + 0.045;
++          return (
++            <div className="tlw" key={i}>
++              {ln.length === 0 ? "\u00A0" : <span className="tl" style={{ "--n": n, "--d": `${d.toFixed(2)}s` } as any}>{ln}</span>}
++            </div>
++          );
++        })}
++      </pre>
++    </div>
++  );
++}
++
++export default function Slide() {
++  return (
++    <div style={{ position: "absolute", top: 92, left: 64, right: 64, bottom: 72, display: "flex", flexDirection: "column" }}>
++      <p className="an up" style={{ font: "700 12.5px var(--fm)", letterSpacing: ".22em", textTransform: "uppercase", color: "var(--ts)", margin: 0, display: "flex", alignItems: "center", gap: 10 }}>
++        <span className="idle-nudge" style={{ color: "var(--js)", fontWeight: 700 }}>{"</>"}</span>
++        Setup
++      </p>
++      <h2 className="an up d1" style={{ font: "700 40px/1.08 var(--fd)", letterSpacing: "-.03em", color: "var(--ink)", margin: "10px 0 0" }}>
++        Turn on <code className="i">strict</code> from day one
++      </h2>
++      <div className="an bar d2" style={{ display: "flex", gap: 6, marginTop: 14 }}>
++        <i className="idle-sheen" style={{ height: 5, borderRadius: 3, width: 52, background: "linear-gradient(90deg,var(--ts),var(--vs),var(--ts))", display: "block" }} />
++        <i style={{ height: 5, borderRadius: 3, width: 18, background: "var(--js)", display: "block" }} />
++      </div>
++      <p className="an up d3" style={{ font: "400 18px/1.5 var(--fb)", color: "var(--mut)", margin: "13px 0 0", maxWidth: 1000 }}>
++        One flag enables the checks that make inference trustworthy.
++      </p>
++
++      <div className="stag" style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr", gap: 26, alignItems: "start", marginTop: 18 }}>
++        <Code file="tsconfig.json" lang="json" size={14}>
++          <Kw>{"{"}</Kw>{"\n  "}<V>{'"compilerOptions"'}</V>{": "}<Kw>{"{"}</Kw>{"\n    "}
++          <V>{'"target"'}</V>{": "}<S>{'"ES2022"'}</S>{",\n    "}
++          <V>{'"module"'}</V>{": "}<S>{'"ESNext"'}</S>{",\n    "}
++          <V>{'"moduleResolution"'}</V>{": "}<S>{'"Bundler"'}</S>{",\n    "}
++          <V>{'"strict"'}</V>{": "}<N>{"true"}</N>{",\n    "}
++          <V>{'"sourceMap"'}</V>{": "}<N>{"true"}</N>{",\n    "}
++          <V>{'"outDir"'}</V>{": "}<S>{'"dist"'}</S>{",\n    "}
++          <V>{'"skipLibCheck"'}</V>{": "}<N>{"true"}</N>{"\n  "}<Kw>{"}"}</Kw>{",\n  "}<V>{'"include"'}</V>{": ["}<S>{'"src"'}</S>{"]\n"}<Kw>{"}"}</Kw>
++        </Code>
++        <div className="an up d5">
++          <table className="tbl">
++            <thead>
++              <tr><th>Under strict</th><th>Catches</th></tr>
++            </thead>
++            <tbody>
++              <tr><td><code className="i">strictNullChecks</code></td><td style={{ color: "var(--mut)" }}>undefined / null misuse</td></tr>
++              <tr><td><code className="i">noImplicitAny</code></td><td style={{ color: "var(--mut)" }}>Untyped parameters</td></tr>
++              <tr><td><code className="i">strictFunctionTypes</code></td><td style={{ color: "var(--mut)" }}>Unsafe callback types</td></tr>
++              <tr><td><code className="i">alwaysStrict</code></td><td style={{ color: "var(--mut)" }}>Emits “use strict”</td></tr>
++            </tbody>
++          </table>
++          <div className="an up d9" style={{ marginTop: 16, display: "flex", alignItems: "center", gap: 9, font: "500 13.5px var(--fm)", color: "var(--mut)" }}>
++            <span className="idle-pulse" style={{ width: 9, height: 9, borderRadius: "50%", background: "var(--ok)", display: "inline-block" }} />
++            strict ships on by default in create-* scaffolds today
++          </div>
++        </div>
++      </div>
++    </div>
++  );
++}
+diff --git a/slides/why.tsx b/slides/why.tsx
+new file mode 100644
+index 0000000..510fc49
+--- /dev/null
++++ b/slides/why.tsx
+@@ -0,0 +1,86 @@
++/* 04 · Why Tooling? — JavaScript fails at runtime */
++
++function Code({ file, lang, size = 15, style, children }: any) {
++  const lines: any[][] = [[]];
++  const kids: any[] = Array.isArray(children) ? children : [children];
++  for (const c of kids) {
++    if (typeof c === "string") {
++      (c as string).split("\n").forEach((p, i) => {
++        if (i > 0) lines.push([]);
++        if (p) lines[lines.length - 1].push(p);
++      });
++    } else {
++      lines[lines.length - 1].push(c);
++    }
++  }
++  const clen = (xs: any[]): number =>
++    xs.reduce((n, x) => n + (typeof x === "string" ? x.length : clen(Array.isArray(x.props.children) ? x.props.children : [x.props.children])), 0);
++  let t = 0.55;
++  return (
++    <div className="code" style={style}>
++      <div className="code-bar"><i /><i /><i /><b>{file}</b><em className={lang === "js" ? "js" : ""}>{(lang || "ts").toUpperCase()}</em></div>
++      <div className="idle-scan" />
++      <pre style={{ fontSize: size, padding: "13px 16px" }}>
++        {lines.map((ln, i) => {
++          const n = Math.max(4, clen(ln));
++          const d = t;
++          t += n * 0.011 + 0.045;
++          return (
++            <div className="tlw" key={i}>
++              {ln.length === 0 ? "\u00A0" : <span className="tl" style={{ "--n": n, "--d": `${d.toFixed(2)}s` } as any}>{ln}</span>}
++            </div>
++          );
++        })}
++      </pre>
++    </div>
++  );
++}
++
++const F = (p: any) => <span style={{ color: "var(--tk-d)" }}>{p.children}</span>;
++const V = (p: any) => <span style={{ color: "var(--tk-f)" }}>{p.children}</span>;
++const N = (p: any) => <span style={{ color: "var(--tk-n)" }}>{p.children}</span>;
++const Cm = (p: any) => <span style={{ color: "var(--tk-cm)", fontStyle: "italic" }}>{p.children}</span>;
++const Kw = (p: any) => <span style={{ color: "var(--tk-k)" }}>{p.children}</span>;
++
++export default function Slide() {
++  return (
++    <div style={{ position: "absolute", top: 92, left: 64, right: 64, bottom: 72, display: "flex", flexDirection: "column" }}>
++      <p className="an up" style={{ font: "700 12.5px var(--fm)", letterSpacing: ".22em", textTransform: "uppercase", color: "var(--ts)", margin: 0, display: "flex", alignItems: "center", gap: 10 }}>
++        <span className="idle-nudge" style={{ color: "var(--js)", fontWeight: 700 }}>{"</>"}</span>
++        Motivation
++      </p>
++      <h2 className="an up d1" style={{ font: "700 40px/1.08 var(--fd)", letterSpacing: "-.03em", color: "var(--ink)", margin: "10px 0 0" }}>
++        JavaScript fails <span style={{ background: "linear-gradient(transparent 62%, var(--js-soft) 62%)", padding: "0 .12em" }}>at runtime</span>
++      </h2>
++      <div className="an bar d2" style={{ display: "flex", gap: 6, marginTop: 14 }}>
++        <i className="idle-sheen" style={{ height: 5, borderRadius: 3, width: 52, background: "linear-gradient(90deg,var(--ts),var(--vs),var(--ts))", display: "block" }} />
++        <i style={{ height: 5, borderRadius: 3, width: 18, background: "var(--js)", display: "block" }} />
++      </div>
++      <p className="an up d3" style={{ font: "400 18px/1.5 var(--fb)", color: "var(--mut)", margin: "13px 0 0", maxWidth: 1000 }}>
++        Most bugs aren’t clever — they’re typos, wrong shapes and wrong assumptions that show up in front of users.
++      </p>
++
++      <div className="stag" style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr", gap: 26, alignItems: "start", marginTop: 20 }}>
++        <Code file="app.js" lang="js" size={15.5}>
++          <Kw>{"function "}</Kw><F>total</F>{"(cart) {\n  "}<Kw>{"return "}</Kw>{"cart."}<F>reduce</F>{"((s, i) => s + i."}<span className="squig" style={{ backgroundColor: "rgba(244,71,71,.14)" }}><V>prise</V></span>{", "}<N>0</N>{");\n}\n\n"}<F>total</F>{"([{ "}<V>price</V>{": "}<N>10</N>{" }]);\n"}<Cm>{"// → NaN   (no error, no warning)"}</Cm>
++        </Code>
++        <div className="stag sb" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
++          <div style={{ position: "relative", background: "var(--card)", border: "1px solid var(--line)", borderRadius: 14, padding: "16px 18px", boxShadow: "var(--shadow)", overflow: "hidden" }}>
++            <span style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 4, background: "var(--js)" }} />
++            <h4 style={{ font: "600 17.5px var(--fd)", margin: "0 0 4px", color: "var(--ink)" }}>Silent failures</h4>
++            <p style={{ font: "400 14px/1.45 var(--fb)", color: "var(--mut)", margin: 0 }}>
++              A typo like <code className="i">prise</code> gives <code className="i">undefined</code>, then <code className="i">NaN</code> — discovered late.
++            </p>
++          </div>
++          <div style={{ position: "relative", background: "var(--card)", border: "1px solid var(--line)", borderRadius: 14, padding: "16px 18px", boxShadow: "var(--shadow)", overflow: "hidden" }}>
++            <span style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 4, background: "var(--ts)" }} />
++            <h4 style={{ font: "600 17.5px var(--fd)", margin: "0 0 4px", color: "var(--ink)" }}>Shift left</h4>
++            <p style={{ font: "400 14px/1.45 var(--fb)", color: "var(--mut)", margin: 0 }}>
++              Linter, types and debugger move the discovery from production to your editor.
++            </p>
++          </div>
++        </div>
++      </div>
++    </div>
++  );
++}
+diff --git a/slides/workflow.tsx b/slides/workflow.tsx
+new file mode 100644
+index 0000000..35f1dd0
+--- /dev/null
++++ b/slides/workflow.tsx
+@@ -0,0 +1,57 @@
++/* 16 · The Daily Loop — putting it together */
++
++const Ic = ({ children, size = 24 }: any) => (
++  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>{children}</svg>
++);
++
++function Step({ no, icon, h, p, y }: any) {
++  return (
++    <div style={{ flex: 1, border: "1px solid var(--line)", borderTop: `4px solid ${y ? "var(--js)" : "var(--ts)"}`, borderRadius: 12, padding: "15px 16px", background: "var(--card)", boxShadow: "var(--shadow)", position: "relative", minWidth: 0 }}>
++      <span style={{ position: "absolute", top: 10, right: 13, font: "600 11px var(--fm)", color: "var(--faint)" }}>{no}</span>
++      <span className="idle-float" style={{ color: y ? "#B58F00" : "var(--ts)", display: "block" }}>{icon}</span>
++      <h4 style={{ font: "600 16.5px var(--fd)", color: "var(--ink)", margin: "9px 0 4px" }}>{h}</h4>
++      <p style={{ font: "400 13px/1.45 var(--fb)", color: "var(--mut)", margin: 0 }}>{p}</p>
++    </div>
++  );
++}
++
++const Sep = () => (
++  <div style={{ flex: "none", width: 30, display: "grid", placeItems: "center", color: "var(--faint)" }}>
++    <span className="idle-nudge" style={{ display: "inline-flex" }}>
++      <Ic size={19}><path d="M5 12h14M13 6l6 6-6 6" /></Ic>
++    </span>
++  </div>
++);
++
++export default function Slide() {
++  return (
++    <div style={{ position: "absolute", top: 92, left: 64, right: 64, bottom: 72, display: "flex", flexDirection: "column" }}>
++      <p className="an up" style={{ font: "700 12.5px var(--fm)", letterSpacing: ".22em", textTransform: "uppercase", color: "var(--ts)", margin: 0, display: "flex", alignItems: "center", gap: 10 }}>
++        <span className="idle-nudge" style={{ color: "var(--js)", fontWeight: 700 }}>{"</>"}</span>
++        Workflow
++      </p>
++      <h2 className="an up d1" style={{ font: "700 40px/1.08 var(--fd)", letterSpacing: "-.03em", color: "var(--ink)", margin: "10px 0 0" }}>Putting it together</h2>
++      <div className="an bar d2" style={{ display: "flex", gap: 6, marginTop: 14 }}>
++        <i className="idle-sheen" style={{ height: 5, borderRadius: 3, width: 52, background: "linear-gradient(90deg,var(--ts),var(--vs),var(--ts))", display: "block" }} />
++        <i style={{ height: 5, borderRadius: 3, width: 18, background: "var(--js)", display: "block" }} />
++      </div>
++
++      <div className="stag" style={{ display: "flex", alignItems: "stretch", marginTop: 40 }}>
++        <Step no="01" icon={<Ic><path d="m8 7-5 5 5 5M16 7l5 5-5 5" /></Ic>} h="Write" p="IntelliSense + inference guide you." />
++        <Sep />
++        <Step no="02" y icon={<Ic><path d="M12 2 4 6v6c0 5 3.4 8.4 8 10 4.6-1.6 8-5 8-10V6z" /></Ic>} h="Lint" p="ESLint + Prettier run on save." />
++        <Sep />
++        <Step no="03" icon={<Ic><path d="m4 12.5 5 5L20 6.5" /></Ic>} h="Type-check" p={<><code className="i">tsc --noEmit</code> in CI and locally.</>} />
++        <Sep />
++        <Step no="04" y icon={<Ic><circle cx="12" cy="13" r="5" /><path d="M12 8V6M8.5 9.5 6 7M15.5 9.5 18 7M7 13H4M20 13h-3M8.5 16.5 6 19M15.5 16.5 18 19" /></Ic>} h="Debug" p="F5 with source maps for the hard ones." />
++      </div>
++
++      <div className="an up d8" style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 26, font: "500 15px var(--fm)", color: "var(--mut)", justifyContent: "center" }}>
++        <span className="idle-spin" style={{ color: "var(--ts)", display: "inline-flex" }}>
++          <Ic size={19}><path d="m17 2 4 4-4 4M3 11v-1a4 4 0 0 1 4-4h14M7 22l-4-4 4-4M21 13v1a4 4 0 0 1-4 4H3" /></Ic>
++        </span>
++        Fast feedback beats late discovery.
++      </div>
++    </div>
++  );
++}
+diff --git a/theme.css b/theme.css
+index 88c5035..ce82c72 100644
+--- a/theme.css
++++ b/theme.css
+@@ -1,36 +1,257 @@
+-/* Chassé deck theme — warm stage aesthetic.
+-   Dark lives on :root, light overrides on [data-theme="light"]. */
+-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Fraunces:ital,wght@1,500;1,600&display=swap');
++/* TypeScript 101 — "Type Flow" theme.
++   Light-first: a calm sky field with JS-yellow → sky → TS-blue flowing
++   ribbons (drawn by bg/common.tsx). Dark mode = deep ink navy.
++   Code windows always render as a real VS Code editor (dark) in both modes.
++   Keeps the smdeck variable contract (--acc/--ink/--card/--fd/…) and the
++   opt-in motion-class API (.an · .stag · .tl · .idle-* · .cur · .squig · .hl). */
++@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
++
+ :root {
+-  --acc: #ffb454;
+-  --acc2: #ff8fa3;
+-  --ink: #f3eff9;
+-  --ink2: #efeaf7;
+-  --mut: #a59dbb;
+-  --line: rgba(165, 157, 187, 0.22);
+-  --card: rgba(255, 255, 255, 0.05);
+-  --card2: rgba(255, 255, 255, 0.015);
+-  --bg: #100e17;
+-  --grid: rgba(255, 255, 255, 0.035);
+-  --glow: rgba(255, 180, 84, 0.16);
+-  --glow2: rgba(255, 122, 144, 0.1);
+-  --fd: 'Space Grotesk', -apple-system, 'Segoe UI', sans-serif;
+-  --fb: 'Instrument Sans', -apple-system, 'Segoe UI', sans-serif;
+-  --fm: 'JetBrains Mono', ui-monospace, 'SF Mono', Consolas, monospace;
+-  --fbrand: 'Fraunces', Georgia, serif;
++  --ts: #3178C6;
++  --ts-deep: #1F5AA0;
++  --vs: #007ACC;
++  --js: #F0C000;
++  --js-soft: rgba(240, 192, 0, 0.16);
++  --ts-soft: rgba(49, 120, 198, 0.10);
++  --ts-faint: rgba(49, 120, 198, 0.05);
++  --chip-bd: rgba(49, 120, 198, 0.30);
++  --border-strong: #C5D0E0;
++  --faint: #98A4B8;
++  --ok: #107C10;
++  --err: #D13438;
++  --shadow: 0 2px 12px rgba(14, 26, 46, 0.07);
++
++  --acc: var(--ts);
++  --acc2: var(--vs);
++  --warn: #9A6700;
++  --acc-soft: var(--ts-soft);
++  --ink: #0E1A2E;
++  --ink2: #0E1A2E;
++  --mut: #4F5F7A;
++  --line: #E1E7F0;
++  --card: #FFFFFF;
++  --card2: rgba(14, 26, 46, 0.02);
++  --bg: #FCFDFF;
++  --grid: rgba(49, 120, 198, 0.08);
++  --glow: rgba(49, 120, 198, 0.10);
++  --glow2: rgba(240, 192, 0, 0.10);
++
++  --fd: 'Segoe UI Variable Display', 'Segoe UI', 'Inter', -apple-system, BlinkMacSystemFont, system-ui, 'Helvetica Neue', sans-serif;
++  --fb: 'Segoe UI', 'Inter', -apple-system, BlinkMacSystemFont, system-ui, 'Helvetica Neue', sans-serif;
++  --fm: 'Cascadia Code', 'Cascadia Mono', 'JetBrains Mono', Consolas, 'SF Mono', ui-monospace, monospace;
++  --fbrand: 'Cascadia Code', 'JetBrains Mono', ui-monospace, monospace;
++
++  /* editor tokens — code windows are always dark */
++  --code: #1E1E1E;
++  --code-bar: #252526;
++  --code-bd: #333F4F;
++  --code-fg: #D4D4D4;
++  --code-mut: #9DA5B4;
++  --tk-k: #569CD6;
++  --tk-t: #4EC9B0;
++  --tk-str: #CE9178;
++  --tk-d: #DCDCAA;
++  --tk-n: #B5CEA8;
++  --tk-f: #9CDCFE;
++  --tk-cm: #6A9955;
++  --tk-p: #C586C0;
++  --tk-err: #F44747;
++  --tk-warn: #CCA700;
+ }
+-[data-theme="light"] {
+-  --acc: #c25a08;
+-  --acc2: #b4234a;
+-  --ink: #1d1a2c;
+-  --ink2: #16132a;
+-  --mut: #5f5877;
+-  --line: rgba(95, 88, 119, 0.25);
+-  --card: rgba(255, 255, 255, 0.72);
+-  --card2: rgba(255, 255, 255, 0.35);
+-  --bg: #f6f4fa;
+-  --grid: rgba(40, 30, 90, 0.06);
+-  --glow: rgba(194, 90, 8, 0.1);
+-  --glow2: rgba(200, 50, 79, 0.06);
++[data-theme="dark"] {
++  --ts: #5AA6F0;
++  --ts-deep: #9CCBFA;
++  --vs: #3FB1FF;
++  --js: #FFD43B;
++  --js-soft: rgba(255, 212, 59, 0.14);
++  --ts-soft: rgba(90, 166, 240, 0.15);
++  --ts-faint: rgba(90, 166, 240, 0.07);
++  --chip-bd: rgba(90, 166, 240, 0.38);
++  --border-strong: #3A4A6B;
++  --faint: #6F7F9E;
++  --ok: #7FD67A;
++  --err: #F27B84;
++  --shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
++
++  --warn: #E3B341;
++  --ink: #EDF2FB;
++  --ink2: #EDF2FB;
++  --mut: #A9B7D0;
++  --line: #25314D;
++  --card: #121A2E;
++  --card2: rgba(255, 255, 255, 0.03);
++  --bg: #0A1020;
++  --grid: rgba(90, 166, 240, 0.08);
++  --glow: rgba(90, 166, 240, 0.12);
++  --glow2: rgba(255, 212, 59, 0.07);
+ }
+ #root { background: var(--bg); color: var(--ink); font-family: var(--fb); }
++::selection { background: var(--ts); color: #fff; }
++
++/* ── Shared deck furniture ─────────────────────────────────────────── */
++.grad { background: linear-gradient(110deg, var(--ts) 10%, var(--vs) 60%, var(--ts) 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
++code.i { font: 600 0.88em var(--fm); background: var(--ts-soft); color: var(--ts-deep); padding: 0.08em 0.4em; border-radius: 6px; }
++kbd { font: 600 0.95em var(--fm); padding: 2px 7px; border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 6px; color: var(--mut); margin-right: 3px; background: var(--card); }
++
++.chip { display: inline-flex; align-items: center; gap: 8px; font: 600 11.5px var(--fm); letter-spacing: 0.1em; text-transform: uppercase; padding: 8px 14px; border: 1px solid var(--chip-bd); border-radius: 999px; color: var(--ts-deep); background: var(--ts-faint); }
++.chip.js { border-color: rgba(240, 192, 0, 0.5); background: var(--js-soft); color: var(--ink); }
++[data-theme="dark"] .chip.js { border-color: rgba(255, 212, 59, 0.45); }
++.chip-ghost { border-style: dashed; color: var(--mut); background: transparent; border-color: var(--border-strong); }
++
++.tbl { width: 100%; border-collapse: separate; border-spacing: 0; font: 400 15px/1.45 var(--fb); background: var(--card); border-radius: 12px; overflow: hidden; box-shadow: var(--shadow); border: 1px solid var(--line); }
++.tbl th { text-align: left; font: 600 11.5px var(--fm); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ts-deep); background: var(--ts-faint); padding: 11px 16px; border-bottom: 1px solid var(--line); }
++.tbl td { padding: 11px 16px; border-bottom: 1px solid var(--line); color: var(--ink); }
++.tbl tr:last-child td { border-bottom: 0; }
++.tbl td:first-child { font-weight: 600; }
++
++/* VS Code window — always editor-dark, both themes */
++.code { position: relative; background: var(--code); border: 1px solid var(--code-bd); border-radius: 14px; overflow: hidden; box-shadow: 0 10px 34px rgba(8, 16, 36, 0.28); min-width: 0; }
++.code-bar { display: flex; align-items: center; gap: 7px; padding: 9px 14px; background: var(--code-bar); border-bottom: 1px solid var(--code-bd); }
++.code-bar i { width: 11px; height: 11px; border-radius: 50%; background: #FF5F57; flex: none; }
++.code-bar i:nth-child(2) { background: #FEBC2E; }
++.code-bar i:nth-child(3) { background: #28C840; }
++.code-bar b { margin-left: 10px; font: 500 11.5px var(--fm); color: var(--code-mut); letter-spacing: 0.06em; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
++.code-bar em { margin-left: auto; font: 700 10.5px var(--fm); font-style: normal; background: #3178C6; color: #fff; padding: 2px 7px; border-radius: 5px; flex: none; }
++.code-bar em.js { background: #F0C000; color: #1b1b1b; }
++.code pre { margin: 0; padding: 13px 18px; font: 400 15px/1.6 var(--fm); color: var(--code-fg); white-space: pre; }
++/* inline diagnostics inside the editor */
++.hint { display: block; margin: 2px 0 4px; padding: 3px 10px; border-left: 3px solid var(--tk-err); color: #F48771; font: 400 13.5px/1.4 var(--fm); background: rgba(244, 71, 71, 0.08); }
++.hint.info { border-color: #3794FF; color: #75BEFF; background: rgba(55, 148, 255, 0.1); }
++.hint.ok { border-color: #4EC9B0; color: #4EC9B0; background: rgba(78, 201, 176, 0.1); }
++.dbgline { display: block; background: rgba(255, 212, 59, 0.14); margin: 0 -18px; padding: 0 18px; border-left: 3px solid #FFD43B; }
++.bp { display: inline-block; width: 0.68em; height: 0.68em; border-radius: 50%; background: #E51400; margin-right: 0.6em; }
++
++/* ══════════════════════════════════════════════════════════════════
++   MOTION LAYER — entrances · one-by-one loading · fast typing · idle
++   Pure CSS. Opt-in classes only; slides without classes stay static.
++
++   .an + variant ......... single-element entrance (up/fade/left/right/
++                           pop/bar/blur), delays via .d1–.d12
++   .stag ................. container whose children land ONE BY ONE
++                           (start = --sd, step = --ss; .sb/.sc start later)
++   .tl / .tlw ............ fast per-line code typing (steps by char count)
++   .idle-* ............... ambient loops (float/pulse/spin/bob/nudge/sheen/
++                           text-sheen/glow/ring/scan/drift)
++   .squig ................ wavy lint-error underline, always animating
++   .hl ................... one-shot "active line" flash for editor rows
++   .cur .................. blinking terminal cursor
++   ══════════════════════════════════════════════════════════════════ */
++
++/* ── Keyframes: entrances ── */
++@keyframes smRise   { from { opacity: 0; transform: translateY(26px); } to { opacity: 1; transform: translateY(0); } }
++@keyframes smFade   { from { opacity: 0; } to { opacity: 1; } }
++@keyframes smLeft   { from { opacity: 0; transform: translateX(-38px); } to { opacity: 1; transform: translateX(0); } }
++@keyframes smRight  { from { opacity: 0; transform: translateX(38px); } to { opacity: 1; transform: translateX(0); } }
++@keyframes smPop    { 0% { opacity: 0; transform: scale(.78); } 62% { opacity: 1; transform: scale(1.05); } 100% { opacity: 1; transform: scale(1); } }
++@keyframes smBar    { from { transform: scaleX(0); } to { transform: scaleX(1); } }
++@keyframes smBlurIn { from { opacity: 0; transform: translateY(22px) scale(.94); } to { opacity: 1; transform: translateY(0) scale(1); } }
++@keyframes smTypeIn { from { clip-path: inset(-40% 106% -40% -2%); } to { clip-path: inset(-40% -8% -40% -2%); } }
++
++/* ── Keyframes: idle / ambient loops ── */
++@keyframes smFloat     { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-7px); } }
++@keyframes smPulse     { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.14); opacity: .75; } }
++@keyframes smSpin      { to { transform: rotate(360deg); } }
++@keyframes smBob       { 0%, 100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-2.4px) scale(1.06); } }
++@keyframes smNudge     { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(5px); } }
++@keyframes smBlink     { 0%, 55% { opacity: 1; } 56%, 100% { opacity: 0; } }
++@keyframes smSheen     { from { background-position: 220% 0; } to { background-position: -220% 0; } }
++@keyframes smTextSheen { from { background-position: 0% 50%; } to { background-position: 300% 50%; } }
++@keyframes smGlowPulse { 0%, 100% { box-shadow: 0 0 0 3px var(--acc-soft); } 50% { box-shadow: 0 0 0 3px var(--acc-soft), 0 0 26px color-mix(in srgb, var(--acc) 36%, transparent); } }
++@keyframes smRing      { 0%, 100% { box-shadow: 0 0 0 10px var(--acc-soft); } 50% { box-shadow: 0 0 0 18px var(--acc-soft); } }
++@keyframes smScan      { 0% { transform: translateY(-110%); opacity: 0; } 12% { opacity: 1; } 88% { opacity: 1; } 100% { transform: translateY(110%); opacity: 0; } }
++@keyframes smDrift     { 0%, 100% { transform: translate(0, 0) rotate(0deg); } 33% { transform: translate(9px, -13px) rotate(7deg); } 66% { transform: translate(-8px, 8px) rotate(-6deg); } }
++@keyframes smSquig     { from { background-position-x: 0; } to { background-position-x: 24px; } }
++@keyframes smHlFlash   { 0% { background: rgba(255, 212, 59, 0.38); } 100% { background: rgba(255, 212, 59, 0.14); } }
++
++/* ── Entrance primitives ────────────────────────────────────────────
++   fill-mode: backwards → elements rest at their natural state after
++   landing, so hover transitions keep working afterwards. */
++.an { animation-duration: var(--du, .62s); animation-timing-function: cubic-bezier(.22, 1, .36, 1); animation-fill-mode: backwards; }
++.an.up    { animation-name: smRise; }
++.an.fade  { animation-name: smFade; animation-timing-function: ease-out; }
++.an.left  { animation-name: smLeft; }
++.an.right { animation-name: smRight; }
++.an.pop   { animation-name: smPop; animation-duration: var(--du, .58s); }
++.an.bar   { animation-name: smBar; transform-origin: left center; animation-duration: var(--du, .72s); }
++.an.blur  { animation-name: smBlurIn; animation-duration: var(--du, .85s); }
++
++/* absolute entrance delays */
++.d1 { animation-delay: .07s; }  .d2 { animation-delay: .14s; }  .d3 { animation-delay: .22s; }
++.d4 { animation-delay: .30s; }  .d5 { animation-delay: .38s; }  .d6 { animation-delay: .46s; }
++.d7 { animation-delay: .56s; }  .d8 { animation-delay: .66s; }  .d9 { animation-delay: .76s; }
++.d10 { animation-delay: .88s; } .d11 { animation-delay: 1s; }   .d12 { animation-delay: 1.12s; }
++
++/* ── One-by-one loading: staggered children ── */
++.stag > * { animation: smRise var(--du, .55s) cubic-bezier(.22, 1, .36, 1) backwards; }
++.stag > *:nth-child(1)  { animation-delay: var(--sd, .34s); }
++.stag > *:nth-child(2)  { animation-delay: calc(var(--sd, .34s) + var(--ss, .085s)); }
++.stag > *:nth-child(3)  { animation-delay: calc(var(--sd, .34s) + var(--ss, .085s) * 2); }
++.stag > *:nth-child(4)  { animation-delay: calc(var(--sd, .34s) + var(--ss, .085s) * 3); }
++.stag > *:nth-child(5)  { animation-delay: calc(var(--sd, .34s) + var(--ss, .085s) * 4); }
++.stag > *:nth-child(6)  { animation-delay: calc(var(--sd, .34s) + var(--ss, .085s) * 5); }
++.stag > *:nth-child(7)  { animation-delay: calc(var(--sd, .34s) + var(--ss, .085s) * 6); }
++.stag > *:nth-child(8)  { animation-delay: calc(var(--sd, .34s) + var(--ss, .085s) * 7); }
++.stag > *:nth-child(9)  { animation-delay: calc(var(--sd, .34s) + var(--ss, .085s) * 8); }
++.stag > *:nth-child(10) { animation-delay: calc(var(--sd, .34s) + var(--ss, .085s) * 9); }
++.stag > *:nth-child(11) { animation-delay: calc(var(--sd, .34s) + var(--ss, .085s) * 10); }
++.stag > *:nth-child(12) { animation-delay: calc(var(--sd, .34s) + var(--ss, .085s) * 11); }
++.stag > *:nth-child(13) { animation-delay: calc(var(--sd, .34s) + var(--ss, .085s) * 12); }
++.stag > *:nth-child(14) { animation-delay: calc(var(--sd, .34s) + var(--ss, .085s) * 13); }
++.stag > *:nth-child(15) { animation-delay: calc(var(--sd, .34s) + var(--ss, .085s) * 14); }
++.stag > *:nth-child(16) { animation-delay: calc(var(--sd, .34s) + var(--ss, .085s) * 15); }
++.stag.poppy > * { animation-name: smPop; animation-duration: var(--du, .5s); }
++/* later waves: add .sb / .sc to the container */
++.sb { --sd: .55s; }
++.sc { --sd: .72s; }
++
++/* hover interactivity for landing cards/rows (works after entrance) */
++.stag > * { transition: transform .35s cubic-bezier(.22, 1, .36, 1), border-color .35s ease, box-shadow .35s ease; }
++.stag > *:hover { transform: translateY(-4px); border-color: color-mix(in srgb, var(--acc) 52%, transparent); box-shadow: 0 16px 32px -16px color-mix(in srgb, var(--acc) 42%, transparent); }
++[data-theme="dark"] .stag > *:hover { box-shadow: 0 16px 32px -16px rgba(0, 0, 0, .75); }
++
++/* ── Fast code typing (per line) ──
++   .tlw: block line wrapper · .tl: shrink-to-fit line that wipes in with
++   steps(--n) → uniform ~--tms per character (fast).
++   Base state is fully revealed; fill-mode: backwards hides each line
++   during its delay, then the keyframes wipe it in. */
++.tlw { display: block; white-space: pre; }
++.tl  { display: inline-block; min-width: 1ch; white-space: pre; animation: smTypeIn calc(var(--n, 24) * var(--tms, 12ms)) steps(var(--n, 24), end) var(--d, 0s) backwards; }
++
++/* terminal cursor */
++.cur { animation: smBlink 1.05s steps(1) infinite; }
++
++/* ── Idle / ambient utilities ── */
++.idle-float      { animation: smFloat 5.2s ease-in-out infinite; }
++.idle-pulse      { animation: smPulse 2.7s ease-in-out infinite; }
++.idle-spin       { transform-box: fill-box; transform-origin: center; animation: smSpin 22s linear infinite; }
++.idle-bob        { animation: smBob 3.6s ease-in-out infinite; }
++.idle-nudge      { animation: smNudge 2.1s ease-in-out infinite; }
++.idle-sheen      { background-size: 220% 100%; animation: smSheen 4.2s ease-in-out infinite; }
++.idle-text-sheen { background-size: 240% 100%; animation: smTextSheen 6s ease-in-out infinite; }
++.idle-glow       { animation: smGlowPulse 3.2s ease-in-out infinite; }
++.idle-ring       { animation: smRing 3.4s ease-in-out infinite; }
++.idle-drift      { animation: smDrift 7.5s ease-in-out infinite; }
++.idle-scan       { position: absolute; left: 0; right: 0; height: 34%; top: 0; pointer-events: none; background: linear-gradient(180deg, transparent, rgba(78, 201, 176, 0.06), transparent); animation: smScan 5.5s ease-in-out infinite; }
++
++/* wavy error underline (ESLint squiggle) — shifts forever, editor-dark color */
++.squig {
++  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='6' viewBox='0 0 12 6'%3E%3Cpath d='M0 4.5 Q1.5 1 3 3 T6 3 T9 3 T12 3' fill='none' stroke='%23F44747' stroke-width='1.6'/%3E%3C/svg%3E");
++  background-repeat: repeat-x;
++  background-position: bottom left;
++  background-size: 12px 6px;
++  padding-bottom: 5px;
++  animation: smSquig .55s linear infinite;
++}
++.squig.w { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='6' viewBox='0 0 12 6'%3E%3Cpath d='M0 4.5 Q1.5 1 3 3 T6 3 T9 3 T12 3' fill='none' stroke='%23CCA700' stroke-width='1.6'/%3E%3C/svg%3E"); }
++/* one-shot active-line flash — use inside code panels */
++.hl { animation: smHlFlash 2.6s ease-out .9s backwards; }
++/* floating code glyphs on decorative layers */
++.glyph { position: absolute; font-family: var(--fm); font-weight: 700; color: var(--ts); opacity: .12; user-select: none; pointer-events: none; }
++.glyph.t { color: var(--vs); }
++.glyph.w { color: var(--js); }
++
++/* ── Accessibility: respect reduced motion ── */
++@media (prefers-reduced-motion: reduce) {
++  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
++  .tl, .an, .stag > * { opacity: 1 !important; clip-path: none !important; }
++}
