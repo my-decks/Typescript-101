@@ -7,7 +7,7 @@ const LOOP_MS = 25000; // intro replays on this cadence
 
 const SUBTITLE =
   "Native debugging, linting & TypeScript type inference — the three habits that make JavaScript projects calmer to build.".split(
-    " ",
+    " ", 
   );
 
 const rv = (d: string, extra: React.CSSProperties = {}) =>
